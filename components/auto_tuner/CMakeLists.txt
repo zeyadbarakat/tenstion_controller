@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS 
+        "relay_feedback.c"
+    INCLUDE_DIRS 
+        "include"
+    REQUIRES
+        pid_controller
+        esp_timer
+        nvs_flash
+        freertos
+)

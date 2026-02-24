@@ -1,0 +1,293 @@
+menu "Tension Controller Configuration"
+
+    menu "GPIO Pin Assignments"
+        config ENCODER_GPIO_A
+            int "Encoder Channel A GPIO"
+            default 4
+            help
+                GPIO pin for encoder channel A (PCNT capable)
+
+        config ENCODER_GPIO_B
+            int "Encoder Channel B GPIO"
+            default 5
+            help
+                GPIO pin for encoder channel B (PCNT capable)
+
+        config HX711_GPIO_DATA
+            int "HX711 Data GPIO"
+            default 6
+            help
+                GPIO pin for HX711 data line (DOUT)
+
+        config HX711_GPIO_CLOCK
+            int "HX711 Clock GPIO"
+            default 7
+            help
+                GPIO pin for HX711 clock line (SCK)
+
+        config MOTOR_GPIO_PWM
+            int "Motor PWM GPIO"
+            default 15
+            help
+                GPIO pin for motor PWM output (LEDC capable)
+
+        config MOTOR_GPIO_DIR
+            int "Motor Direction GPIO"
+            default 16
+            help
+                GPIO pin for motor direction control
+
+        config LCD_GPIO_SDA
+            int "LCD I2C SDA GPIO"
+            default 8
+            help
+                GPIO pin for I2C data line
+
+        config LCD_GPIO_SCL
+            int "LCD I2C SCL GPIO"
+            default 9
+            help
+                GPIO pin for I2C clock line
+
+        config BTN_GPIO_RUN
+            int "RUN Button GPIO"
+            default 10
+            help
+                GPIO pin for RUN button (active low with pull-up)
+
+        config BTN_GPIO_STOP
+            int "STOP Button GPIO"
+            default 11
+            help
+                GPIO pin for STOP button (active low with pull-up)
+
+        config BTN_GPIO_ESTOP
+            int "Emergency Stop GPIO"
+            default 12
+            help
+                GPIO pin for emergency stop (NC contacts, active low)
+
+        config LED_GPIO_RUNNING
+            int "Running LED GPIO"
+            default 17
+            help
+                GPIO pin for green running indicator LED
+
+        config LED_GPIO_FAULT
+            int "Fault LED GPIO"
+            default 18
+            help
+                GPIO pin for red fault indicator LED
+    endmenu
+
+    menu "Encoder Configuration"
+        config ENCODER_PPR
+            int "Encoder Pulses Per Revolution"
+            default 600
+            help
+                Number of pulses per revolution (before 4x quadrature multiplication)
+
+        config ENCODER_FILTER_SIZE
+            int "RPM Filter Window Size"
+            default 5
+            range 1 20
+            help
+                Moving average filter window size for RPM smoothing
+    endmenu
+
+    menu "Motor Configuration"
+        config MOTOR_PWM_FREQ_HZ
+            int "Motor PWM Frequency (Hz)"
+            default 25000
+            help
+                PWM frequency for motor control (25kHz typical for silent operation)
+
+        config MOTOR_MAX_RPM
+            int "Maximum Motor RPM"
+            default 2000
+            help
+                Maximum motor speed in RPM
+    endmenu
+
+    menu "Load Cell Configuration"
+        config HX711_FILTER_SIZE
+            int "HX711 Filter Window Size"
+            default 10
+            range 1 50
+            help
+                Moving average filter window size for load cell readings
+
+        config HX711_SAMPLE_RATE_80HZ
+            bool "Use 80Hz Sample Rate"
+            default n
+            help
+                Use 80Hz instead of 10Hz sample rate (noisier but faster)
+    endmenu
+
+    menu "Control Loop Configuration"
+        config TENSION_LOOP_FREQ_HZ
+            int "Tension Loop Frequency (Hz)"
+            default 10
+            help
+                Outer tension control loop update rate
+
+        config SPEED_LOOP_FREQ_HZ
+            int "Speed Loop Frequency (Hz)"
+            default 50
+            help
+                Inner speed control loop update rate
+
+        config SPEED_KP_DEFAULT
+            int "Speed Loop Kp (x1000)"
+            default 500
+            help
+                Default proportional gain for speed loop (divide by 1000)
+
+        config SPEED_KI_DEFAULT
+            int "Speed Loop Ki (x1000)"
+            default 100
+            help
+                Default integral gain for speed loop (divide by 1000)
+
+        config TENSION_KP_DEFAULT
+            int "Tension Loop Kp (x1000)"
+            default 200
+            help
+                Default proportional gain for tension loop (divide by 1000)
+
+        config TENSION_KI_DEFAULT
+            int "Tension Loop Ki (x1000)"
+            default 50
+            help
+                Default integral gain for tension loop (divide by 1000)
+    endmenu
+
+    menu "Safety Limits"
+        config SAFETY_MAX_TENSION_KG
+            int "Maximum Tension (kg x10)"
+            default 100
+            help
+                Maximum allowed tension in kg (x10, e.g., 100 = 10.0 kg)
+
+        config SAFETY_MIN_TENSION_KG
+            int "Minimum Tension (kg x10)"
+            default 5
+            help
+                Minimum allowed tension in kg (x10, e.g., 5 = 0.5 kg)
+
+        config SAFETY_MAX_RPM
+            int "Maximum RPM Limit"
+            default 2000
+            help
+                Maximum allowed motor RPM
+
+        config SAFETY_STALL_TIMEOUT_MS
+            int "Motor Stall Timeout (ms)"
+            default 2000
+            help
+                Time before declaring motor stall fault
+    endmenu
+
+    menu "WiFi Configuration"
+        config WIFI_SSID
+            string "WiFi SSID (Station Mode)"
+            default "TensionController"
+            help
+                SSID of WiFi network to connect to
+
+        config WIFI_PASSWORD
+            string "WiFi Password"
+            default "tension123"
+            help
+                Password for WiFi network
+
+        config WIFI_AP_SSID
+            string "Access Point SSID"
+            default "TensionAP"
+            help
+                SSID for ESP32 Access Point mode
+
+        config WIFI_AP_PASSWORD
+            string "Access Point Password"
+            default "tension123"
+            help
+                Password for Access Point mode (min 8 chars)
+
+        config WIFI_AP_MODE
+            bool "Use Access Point Mode"
+            default y
+            help
+                Start in Access Point mode instead of Station mode
+    endmenu
+
+    menu "LCD Configuration"
+        config LCD_I2C_ADDRESS
+            hex "LCD I2C Address"
+            default 0x27
+            help
+                I2C address of PCF8574 LCD backpack (0x27 or 0x3F typical)
+
+        config LCD_ROWS
+            int "LCD Rows"
+            default 4
+            range 2 4
+            help
+                Number of LCD rows (2 or 4)
+
+        config LCD_COLS
+            int "LCD Columns"
+            default 20
+            range 16 20
+            help
+                Number of LCD columns (16 or 20)
+
+        config LCD_BACKLIGHT_TIMEOUT_S
+            int "Backlight Timeout (seconds)"
+            default 60
+            help
+                Time before LCD backlight dims (0 = always on)
+    endmenu
+
+    menu "Data Logger Configuration"
+        config LOGGER_BUFFER_SIZE
+            int "Log Buffer Size (samples)"
+            default 1000
+            range 100 5000
+            help
+                Number of samples to keep in RAM circular buffer
+
+        config LOGGER_RATE_HZ
+            int "Logging Rate (Hz)"
+            default 10
+            range 1 100
+            help
+                Data logging update rate
+    endmenu
+
+    menu "Feature Enables"
+        config ENABLE_WEB_INTERFACE
+            bool "Enable Web Interface"
+            default y
+            help
+                Enable HTTP server and web dashboard
+
+        config ENABLE_LCD_INTERFACE
+            bool "Enable LCD Interface"
+            default y
+            help
+                Enable I2C LCD display and keypad
+
+        config ENABLE_AUTO_TUNING
+            bool "Enable Auto-Tuning"
+            default y
+            help
+                Enable relay feedback auto-tuning feature
+
+        config ENABLE_DATA_LOGGER
+            bool "Enable Data Logger"
+            default y
+            help
+                Enable data logging and metrics calculation
+    endmenu
+
+endmenu

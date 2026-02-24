@@ -1,0 +1,19 @@
+idf_component_register(
+    SRCS 
+        "control_manager.c"
+    INCLUDE_DIRS 
+        "include"
+    REQUIRES
+        encoder_driver
+        loadcell_driver
+        motor_controller
+        pid_controller
+        auto_tuner
+        safety_monitor
+        data_logger
+        button_handler
+        lcd_interface
+        esp_timer
+        freertos
+        nvs_flash
+)

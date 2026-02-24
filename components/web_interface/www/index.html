@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tension Controller</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #f1f5f9;
+            min-height: 100vh;
+            padding: 12px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        h1 {
+            font-size: 1.2rem;
+            color: #60a5fa;
+        }
+
+        .conn {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .conn.on {
+            background: #22c55e;
+            box-shadow: 0 0 8px #22c55e;
+        }
+
+        .conn.off {
+            background: #ef4444;
+        }
+
+        /* Status Cards */
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 10px;
+            text-align: center;
+        }
+
+        .card-lbl {
+            font-size: 0.7rem;
+            color: #94a3b8;
+        }
+
+        .card-val {
+            font-size: 1.4rem;
+            font-weight: 700;
+        }
+
+        .tension {
+            color: #3b82f6;
+        }
+
+        .speed {
+            color: #10b981;
+        }
+
+        .pwm {
+            color: #f59e0b;
+        }
+
+        .state {
+            color: #a78bfa;
+        }
+
+        .card.fault {
+            background: rgba(239, 68, 68, 0.2);
+            border: 1px solid #ef4444;
+        }
+
+        .card.running {
+            background: rgba(34, 197, 94, 0.15);
+            border: 1px solid #22c55e;
+        }
+
+        .sp {
+            font-size: 0.65rem;
+            color: #64748b;
+        }
+
+        /* Graph */
+        .graph-box {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 10px;
+            margin-bottom: 12px;
+        }
+
+        .graph-title {
+            font-size: 0.75rem;
+            color: #94a3b8;
+            margin-bottom: 5px;
+        }
+
+        canvas {
+            width: 100%;
+            height: 120px;
+        }
+
+        .legend {
+            display: flex;
+            gap: 15px;
+            font-size: 0.7rem;
+            margin-top: 5px;
+        }
+
+        .legend span {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .dot.actual {
+            background: #3b82f6;
+        }
+
+        .dot.setpoint {
+            background: #f59e0b;
+        }
+
+        /* Setpoint Control */
+        .sp-ctrl {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 12px;
+        }
+
+        .sp-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+        }
+
+        .sp-btn {
+            width: 50px;
+            height: 50px;
+            border: none;
+            border-radius: 50%;
+            font-size: 1.5rem;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .sp-btn.minus {
+            background: #ef4444;
+            color: #fff;
+        }
+
+        .sp-btn.plus {
+            background: #22c55e;
+            color: #fff;
+        }
+
+        .sp-display {
+            text-align: center;
+        }
+
+        .sp-val {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #f59e0b;
+        }
+
+        .sp-unit {
+            font-size: 0.9rem;
+            color: #94a3b8;
+        }
+
+        .sp-label {
+            font-size: 0.7rem;
+            color: #64748b;
+        }
+
+        /* Jog Controls */
+        .jog-box {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid #3b82f6;
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 12px;
+        }
+
+        .jog-title {
+            font-size: 0.75rem;
+            color: #60a5fa;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+
+        .jog-row {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        .jog-btn {
+            flex: 1;
+            max-width: 120px;
+            padding: 15px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .jog-left {
+            background: #6366f1;
+            color: #fff;
+        }
+
+        .jog-right {
+            background: #8b5cf6;
+            color: #fff;
+        }
+
+        .jog-stop {
+            background: #ef4444;
+            color: #fff;
+        }
+
+        .jog-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .jog-note {
+            font-size: 0.65rem;
+            color: #64748b;
+            text-align: center;
+            margin-top: 6px;
+        }
+
+        /* Control Buttons */
+        .ctrl-btns {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .ctrl-btn {
+            flex: 1;
+            padding: 14px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .btn-start {
+            background: #22c55e;
+            color: #fff;
+        }
+
+        .btn-stop {
+            background: #f59e0b;
+            color: #000;
+        }
+
+        .btn-estop {
+            background: #ef4444;
+            color: #fff;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 8px 8px 0 0;
+            background: rgba(255, 255, 255, 0.05);
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+
+        .tab.active {
+            background: rgba(255, 255, 255, 0.15);
+            color: #fff;
+        }
+
+        .tab-content {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 0 0 10px 10px;
+            padding: 12px;
+            min-height: 100px;
+        }
+
+        .tab-pane {
+            display: none;
+        }
+
+        .tab-pane.active {
+            display: block;
+        }
+
+        /* Tab content styling */
+        .row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            align-items: center;
+        }
+
+        .lbl {
+            font-size: 0.75rem;
+            color: #94a3b8;
+            width: 80px;
+        }
+
+        input[type="number"] {
+            flex: 1;
+            padding: 8px;
+            border: 1px solid #374151;
+            border-radius: 6px;
+            background: #1e293b;
+            color: #fff;
+            font-size: 0.9rem;
+        }
+
+        .btn-sm {
+            padding: 8px 15px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+
+        .btn-blue {
+            background: #3b82f6;
+            color: #fff;
+        }
+
+        .btn-gray {
+            background: #374151;
+            color: #fff;
+        }
+
+        /* Faults */
+        .faults {
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid #ef4444;
+            border-radius: 10px;
+            padding: 10px;
+            margin-bottom: 12px;
+        }
+
+        .faults h3 {
+            font-size: 0.8rem;
+            color: #ef4444;
+            margin-bottom: 5px;
+        }
+
+        .fault-item {
+            font-size: 0.75rem;
+            color: #fca5a5;
+            padding: 2px 0;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        footer {
+            text-align: center;
+            font-size: 0.65rem;
+            color: #475569;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>🎛️ Tension Controller</h1>
+        <span id="conn" class="conn off"></span>
+    </header>
+
+    <!-- Status Cards -->
+    <div class="cards">
+        <div class="card">
+            <div class="card-lbl">Tension</div>
+            <div class="card-val tension"><span id="tension">--</span></div>
+            <div class="sp">SP: <span id="tension-sp">--</span> kg</div>
+        </div>
+        <div class="card">
+            <div class="card-lbl">Speed</div>
+            <div class="card-val speed"><span id="speed">--</span></div>
+            <div class="sp">RPM</div>
+        </div>
+        <div class="card">
+            <div class="card-lbl">PWM</div>
+            <div class="card-val pwm"><span id="pwm">--</span></div>
+            <div class="sp">%</div>
+        </div>
+        <div class="card" id="state-card">
+            <div class="card-lbl">State</div>
+            <div class="card-val state" id="state">--</div>
+        </div>
+    </div>
+
+    <!-- Live Graph: Actual vs Setpoint -->
+    <div class="graph-box">
+        <div class="graph-title">📈 Tension: Actual vs Setpoint (60s)</div>
+        <canvas id="graph"></canvas>
+        <div class="legend">
+            <span><span class="dot actual"></span> Actual</span>
+            <span><span class="dot setpoint"></span> Setpoint</span>
+        </div>
+    </div>
+
+    <!-- Setpoint Control -->
+    <div class="sp-ctrl">
+        <div class="sp-row">
+            <button class="sp-btn minus" id="sp-minus">−</button>
+            <div class="sp-display" id="sp-display">
+                <div class="sp-label">Tension Setpoint (tap to edit)</div>
+                <div>
+                    <span class="sp-val" id="sp-val" style="cursor: pointer;">5.0</span>
+                    <input type="number" id="sp-input" class="sp-input" step="0.1" min="0" max="50"
+                        style="display:none; width:80px; font-size:1.5rem; text-align:center; background:#1e293b; color:#f59e0b; border:2px solid #f59e0b; border-radius:8px;">
+                    <span class="sp-unit">kg</span>
+                </div>
+            </div>
+            <button class="sp-btn plus" id="sp-plus">+</button>
+        </div>
+    </div>
+
+    <!-- Jog Mode (when stopped) -->
+    <div class="jog-box" id="jog-box">
+        <div class="jog-title">🔧 JOG Mode (Motor Preview)</div>
+        <div class="jog-row">
+            <button class="jog-btn jog-left" id="jog-left">◀ LEFT</button>
+            <button class="jog-btn jog-stop" id="jog-stop-btn">⏹ STOP</button>
+            <button class="jog-btn jog-right" id="jog-right">RIGHT ▶</button>
+        </div>
+        <div class="jog-note">Press LEFT/RIGHT to move at 25% speed. Press STOP to halt.</div>
+    </div>
+
+    <!-- Main Control Buttons -->
+    <div class="ctrl-btns">
+        <button class="ctrl-btn btn-start" id="btn-start">▶ START</button>
+        <button class="ctrl-btn btn-stop" id="btn-stop">⏹ STOP</button>
+        <button class="ctrl-btn btn-estop" id="btn-estop">🛑 E-STOP</button>
+    </div>
+
+    <!-- Faults Display -->
+    <div id="faults" class="faults hidden">
+        <h3>⚠️ Active Faults</h3>
+        <div id="fault-list"></div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <button class="tab active" data-tab="tuning">Tuning</button>
+        <button class="tab" data-tab="calib">Calibration</button>
+        <button class="tab" data-tab="logs">Logs</button>
+        <button class="tab" data-tab="info">Info</button>
+    </div>
+    <div class="tab-content">
+        <!-- Tuning Tab -->
+        <div class="tab-pane active" id="tab-tuning">
+            <div class="row"><span class="lbl">Speed Kp:</span><input type="number" id="speed-kp" step="0.1"
+                    value="1.0"><button class="btn-sm btn-blue" onclick="setTuning()">Apply</button></div>
+            <div class="row"><span class="lbl">Speed Ki:</span><input type="number" id="speed-ki" step="0.01"
+                    value="0.1"></div>
+            <div class="row"><span class="lbl">Tension Kp:</span><input type="number" id="tension-kp" step="0.1"
+                    value="2.0"></div>
+            <div class="row"><span class="lbl">Tension Ki:</span><input type="number" id="tension-ki" step="0.01"
+                    value="0.05"></div>
+            <div class="row"><button class="btn-sm btn-gray" onclick="cmd(7)">🔧 Auto-Tune Speed</button><button
+                    class="btn-sm btn-gray" onclick="cmd(8)">🔧 Auto-Tune Tension</button></div>
+        </div>
+        <!-- Calibration Tab -->
+        <div class="tab-pane" id="tab-calib">
+            <div class="row"><span class="lbl">Raw ADC:</span><span id="raw-adc">--</span></div>
+            <div class="row"><span class="lbl">Offset:</span><input type="number" id="cal-offset" value="0"></div>
+            <div class="row"><span class="lbl">Scale:</span><input type="number" id="cal-scale" step="0.0001"
+                    value="0.001"></div>
+            <div class="row"><button class="btn-sm btn-blue" onclick="cmd(5)">⚖️ Tare (Zero)</button><button
+                    class="btn-sm btn-gray" onclick="saveCalib()">💾 Save</button></div>
+        </div>
+        <!-- Logs Tab -->
+        <div class="tab-pane" id="tab-logs">
+            <div class="row"><button class="btn-sm btn-blue" onclick="listLogs()">📂 Refresh Files</button></div>
+            <div id="log-list" style="font-size:0.75rem; color:#94a3b8;">No logs yet</div>
+        </div>
+        <!-- Info Tab -->
+        <div class="tab-pane" id="tab-info">
+            <div class="row"><span class="lbl">Uptime:</span><span id="uptime">--</span></div>
+            <div class="row"><span class="lbl">Free Heap:</span><span id="heap">--</span></div>
+            <div class="row"><span class="lbl">Encoder PPR:</span><input type="number" id="ppr" value="600"
+                    style="width:80px;"><button class="btn-sm btn-gray" onclick="savePPR()"
+                    style="margin-left:8px;">💾</button></div>
+            <div class="row"><span class="lbl">IP:</span><span>192.168.4.1</span></div>
+            <div class="row"><button class="btn-sm btn-blue" onclick="cmd(9)">🔄 Reset Faults</button></div>
+            <div style="font-size:0.7rem; color:#64748b; margin-top:10px;">
+                <b>⚠️ Watchdog</b> = No hardware response (normal without load cell/encoder connected)
+            </div>
+        </div>
+    </div>
+
+    <footer>ESP32-S3 Tension Controller v1.0</footer>
+
+    <script>
+        // State names
+        const STATES = ['Idle', 'Starting', 'Running', 'Stopping', 'Warning', 'Fault', 'E-Stop'];
+        const FAULTS = { 0x0001: 'Tension Over', 0x0002: 'Speed Over', 0x0004: 'Stall', 0x0008: 'Encoder', 0x0010: 'LoadCell', 0x0020: 'Watchdog', 0x8000: 'E-Stop' };
+
+        // Graph data (60 seconds at 2Hz = 120 points)
+        const MAX_POINTS = 120;
+        let graphData = { actual: [], setpoint: [] };
+        let currentSetpoint = 5.0;
+        let currentState = 0;
+
+        // Canvas setup
+        const canvas = document.getElementById('graph');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = canvas.offsetWidth * 2;
+            canvas.height = canvas.offsetHeight * 2;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        // Draw graph
+        function drawGraph() {
+            const w = canvas.width, h = canvas.height;
+            ctx.clearRect(0, 0, w, h);
+
+            // Background grid
+            ctx.strokeStyle = 'rgba(148,163,184,0.1)';
+            ctx.lineWidth = 1;
+            // Find Y scale FIRST (before drawing grid)
+            const allVals = [...graphData.actual, ...graphData.setpoint, currentSetpoint];
+            const maxY = Math.max(...allVals, 1) * 1.3;
+            const minY = 0;
+            const yRange = maxY - minY;
+            const scaleY = h / yRange;
+            const scaleX = w / (MAX_POINTS - 1);
+
+            // Draw horizontal grid lines with Y-axis labels
+            ctx.font = '10px sans-serif';
+            ctx.textAlign = 'left';
+            for (let i = 0; i <= 4; i++) {
+                const yPos = (h / 4) * i;
+                const yVal = (maxY - (maxY / 4) * i).toFixed(1);
+                ctx.beginPath(); ctx.moveTo(25, yPos); ctx.lineTo(w, yPos); ctx.stroke();
+                ctx.fillStyle = '#64748b';
+                ctx.fillText(yVal + 'kg', 2, yPos + 3);
+            }
+
+            // Draw time labels on X-axis
+            ctx.fillStyle = '#475569';
+            ctx.fillText('-60s', 25, h - 2);
+            ctx.textAlign = 'right';
+            ctx.fillText('now', w - 2, h - 2);
+
+            if (graphData.actual.length < 2) return;
+
+            const offsetX = 25; // Leave room for Y labels
+            const drawW = w - offsetX;
+            const drawScaleX = drawW / (MAX_POINTS - 1);
+
+            // Draw setpoint line (orange)
+            ctx.strokeStyle = '#f59e0b';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            graphData.setpoint.forEach((v, i) => {
+                const x = offsetX + i * drawScaleX;
+                const y = h - (v - minY) * scaleY;
+                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+
+            // Draw actual line (blue)
+            ctx.strokeStyle = '#3b82f6';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            graphData.actual.forEach((v, i) => {
+                const x = offsetX + i * drawScaleX;
+                const y = h - (v - minY) * scaleY;
+                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+        }
+
+        // Update dashboard
+        function update(d) {
+            document.getElementById('conn').className = 'conn on';
+            document.getElementById('tension').textContent = d.tension?.toFixed(2) ?? '--';
+            document.getElementById('tension-sp').textContent = d.tensionSP?.toFixed(1) ?? '--';
+            document.getElementById('speed').textContent = d.speed?.toFixed(0) ?? '--';
+            document.getElementById('pwm').textContent = d.pwm?.toFixed(1) ?? '--';
+            document.getElementById('state').textContent = STATES[d.state] ?? 'Unknown';
+            currentState = d.state || 0;
+            currentSetpoint = d.tensionSP || currentSetpoint;
+            document.getElementById('sp-val').textContent = currentSetpoint.toFixed(1);
+
+            // State card styling
+            const sc = document.getElementById('state-card');
+            sc.classList.remove('fault', 'running');
+            if (d.state >= 5) sc.classList.add('fault');
+            else if (d.state == 2) sc.classList.add('running');
+
+            // Jog mode availability
+            const jogBox = document.getElementById('jog-box');
+            // Allow jog in Idle (0) or Fault (5) for testing without hardware
+            const canJog = (d.state === 0 || d.state === 5);
+            document.getElementById('jog-left').disabled = !canJog;
+            document.getElementById('jog-right').disabled = !canJog;
+            jogBox.style.opacity = canJog ? '1' : '0.4';
+
+            // Faults
+            const fp = document.getElementById('faults');
+            const fl = document.getElementById('fault-list');
+            if (d.faults > 0) {
+                fp.classList.remove('hidden');
+                let html = '';
+                for (let [mask, name] of Object.entries(FAULTS)) {
+                    if (d.faults & parseInt(mask)) html += '<div class="fault-item">⚠️ ' + name + '</div>';
+                }
+                fl.innerHTML = html;
+            } else {
+                fp.classList.add('hidden');
+            }
+
+            // Update graph data
+            graphData.actual.push(d.tension || 0);
+            graphData.setpoint.push(d.tensionSP || currentSetpoint);
+            if (graphData.actual.length > MAX_POINTS) {
+                graphData.actual.shift();
+                graphData.setpoint.shift();
+            }
+            drawGraph();
+
+            // Update info tab
+            if (d.uptime !== undefined) {
+                const mins = Math.floor(d.uptime / 60);
+                const secs = d.uptime % 60;
+                document.getElementById('uptime').textContent = mins + 'm ' + secs + 's';
+            }
+            if (d.heap !== undefined) {
+                document.getElementById('heap').textContent = (d.heap / 1024).toFixed(1) + ' KB';
+            }
+        }
+
+        // WebSocket connection for real-time updates
+        let ws = null;
+        let wsConnected = false;
+        let wsReconnectTimer = null;
+
+        function connectWebSocket() {
+            const wsUrl = 'ws://' + window.location.host + '/ws';
+            console.log('Connecting WebSocket:', wsUrl);
+
+            try {
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = function () {
+                    console.log('WebSocket connected');
+                    wsConnected = true;
+                    document.getElementById('conn').className = 'conn on';
+                    document.getElementById('conn').title = 'WebSocket';
+                    // Send initial ping to register with server
+                    ws.send('ping');
+                };
+
+                ws.onmessage = function (event) {
+                    try {
+                        const d = JSON.parse(event.data);
+                        update(d);
+                    } catch (e) {
+                        console.log('WS message:', event.data);
+                    }
+                };
+
+                ws.onclose = function () {
+                    console.log('WebSocket closed, reconnecting...');
+                    wsConnected = false;
+                    document.getElementById('conn').className = 'conn off';
+                    // Reconnect after 2 seconds
+                    wsReconnectTimer = setTimeout(connectWebSocket, 2000);
+                };
+
+                ws.onerror = function (err) {
+                    console.log('WebSocket error:', err);
+                    ws.close();
+                };
+            } catch (e) {
+                console.log('WebSocket not available, using HTTP polling');
+                wsConnected = false;
+            }
+        }
+
+        // HTTP polling fallback (also used for initial data)
+        function poll() {
+            fetch('/api/status').then(r => r.json()).then(update).catch(() => {
+                document.getElementById('conn').className = 'conn off';
+            });
+        }
+
+        // Send command
+        function cmd(c, v) {
+            fetch('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cmd: c, value: v || 0 }) });
+        }
+
+        // Config API functions - Save to NVS
+        function savePPR() {
+            const ppr = parseInt(document.getElementById('ppr').value);
+            fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ppr: ppr })
+            }).then(r => r.json()).then(d => {
+                if (d.saved) alert('PPR saved to NVS! Restart to apply.');
+                else alert('Save failed');
+            }).catch(() => alert('Error saving PPR'));
+        }
+        function saveCalib() {
+            const offset = parseInt(document.getElementById('cal-offset').value);
+            const scale = parseFloat(document.getElementById('cal-scale').value);
+            fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cal_offset: offset, cal_scale: scale })
+            }).then(r => r.json()).then(d => {
+                if (d.saved) alert('Calibration saved to NVS!');
+                else alert('Save failed');
+            }).catch(() => alert('Error saving calibration'));
+        }
+        function setTuning() {
+            const speedKp = parseFloat(document.getElementById('speed-kp').value);
+            const speedKi = parseFloat(document.getElementById('speed-ki').value);
+            const tensKp = parseFloat(document.getElementById('tension-kp').value);
+            const tensKi = parseFloat(document.getElementById('tension-ki').value);
+            fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ speed_kp: speedKp, speed_ki: speedKi, tension_kp: tensKp, tension_ki: tensKi })
+            }).then(r => r.json()).then(d => {
+                if (d.saved) alert('Tuning saved to NVS!');
+                else alert('Save failed');
+            }).catch(() => alert('Error saving tuning'));
+        }
+        function listLogs() {
+            document.getElementById('log-list').innerHTML = 'No log files found. CSV logging not yet active.';
+            // TODO: Fetch from /api/logs endpoint
+        }
+        function loadConfig() {
+            fetch('/api/config').then(r => r.json()).then(cfg => {
+                if (cfg.ppr) document.getElementById('ppr').value = cfg.ppr;
+                if (cfg.cal_offset !== undefined) document.getElementById('cal-offset').value = cfg.cal_offset;
+                if (cfg.cal_scale !== undefined) document.getElementById('cal-scale').value = parseFloat(cfg.cal_scale).toFixed(6);
+                if (cfg.speed_kp !== undefined) document.getElementById('speed-kp').value = parseFloat(cfg.speed_kp).toFixed(2);
+                if (cfg.speed_ki !== undefined) document.getElementById('speed-ki').value = parseFloat(cfg.speed_ki).toFixed(2);
+                if (cfg.tension_kp !== undefined) document.getElementById('tension-kp').value = parseFloat(cfg.tension_kp).toFixed(2);
+                if (cfg.tension_ki !== undefined) document.getElementById('tension-ki').value = parseFloat(cfg.tension_ki).toFixed(2);
+                console.log('Config loaded:', cfg);
+            }).catch(e => console.log('Config load error:', e));
+        }
+
+        // Setpoint adjustment
+        let holdTimer = null;
+        let holdDelay = 300;
+
+        function adjustSP(delta) {
+            currentSetpoint = Math.max(0, Math.min(50, currentSetpoint + delta));
+            currentSetpoint = Math.round(currentSetpoint * 10) / 10; // Round to 1 decimal
+            document.getElementById('sp-val').textContent = currentSetpoint.toFixed(1);
+            cmd(3, currentSetpoint);
+        }
+
+        function startHold(delta) {
+            adjustSP(delta);
+            holdDelay = 300;
+            holdTimer = setTimeout(function repeat() {
+                adjustSP(delta);
+                holdDelay = Math.max(50, holdDelay * 0.8); // Accelerate
+                holdTimer = setTimeout(repeat, holdDelay);
+            }, holdDelay);
+        }
+
+        function stopHold() {
+            if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+        }
+
+        // Setpoint buttons
+        const spMinus = document.getElementById('sp-minus');
+        const spPlus = document.getElementById('sp-plus');
+        const spVal = document.getElementById('sp-val');
+        const spInput = document.getElementById('sp-input');
+
+        spMinus.addEventListener('mousedown', () => startHold(-0.1));
+        spMinus.addEventListener('mouseup', stopHold);
+        spMinus.addEventListener('mouseleave', stopHold);
+        spMinus.addEventListener('touchstart', (e) => { e.preventDefault(); startHold(-0.1); });
+        spMinus.addEventListener('touchend', stopHold);
+        spPlus.addEventListener('mousedown', () => startHold(0.1));
+        spPlus.addEventListener('mouseup', stopHold);
+        spPlus.addEventListener('mouseleave', stopHold);
+        spPlus.addEventListener('touchstart', (e) => { e.preventDefault(); startHold(0.1); });
+        spPlus.addEventListener('touchend', stopHold);
+
+        // Click on setpoint value to edit directly
+        spVal.addEventListener('click', () => {
+            spVal.style.display = 'none';
+            spInput.style.display = 'inline-block';
+            spInput.value = currentSetpoint.toFixed(1);
+            spInput.focus();
+            spInput.select();
+        });
+
+        function applySpInput() {
+            let val = parseFloat(spInput.value) || 0;
+            val = Math.max(0, Math.min(50, val));
+            val = Math.round(val * 10) / 10;
+            currentSetpoint = val;
+            spVal.textContent = val.toFixed(1);
+            spVal.style.display = 'inline';
+            spInput.style.display = 'none';
+            cmd(3, currentSetpoint);
+        }
+
+        spInput.addEventListener('blur', applySpInput);
+        spInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                applySpInput();
+            } else if (e.key === 'Escape') {
+                spVal.style.display = 'inline';
+                spInput.style.display = 'none';
+            }
+        });
+
+        // Jog buttons (click to move, click STOP to halt)
+        function jogMove(dir) {
+            console.log('jogMove called, dir=' + dir);
+            fetch('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cmd: 20, value: dir }) });
+        }
+        function jogStop() {
+            console.log('jogStop called');
+            fetch('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cmd: 21, value: 0 }) });
+        }
+
+        // Simple click handlers - no holding needed
+        document.getElementById('jog-left').onclick = () => jogMove(-1);
+        document.getElementById('jog-right').onclick = () => jogMove(1);
+        document.getElementById('jog-stop-btn').onclick = () => jogStop();
+
+        // Control buttons
+        document.getElementById('btn-start').onclick = () => cmd(0);
+        document.getElementById('btn-stop').onclick = () => cmd(1);
+        document.getElementById('btn-estop').onclick = () => { if (confirm('Emergency Stop?')) cmd(2); };
+
+        // Tabs
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.onclick = () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            };
+        });
+
+        // Start WebSocket connection and load config
+        loadConfig();
+        poll();  // Initial data fetch via HTTP
+        connectWebSocket();  // Try WebSocket for real-time updates
+
+        // Fallback: if WebSocket fails, poll via HTTP every 5 seconds
+        setInterval(() => {
+            if (!wsConnected) {
+                poll();
+            }
+        }, 5000);
+    </script>
+</body>
+
+</html>
