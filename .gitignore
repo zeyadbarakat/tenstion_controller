@@ -2,6 +2,10 @@
 build/
 sdkconfig.old
 
+# Cache and tool artifacts
+.cache/
+.gemini/
+
 # IDE
 .vscode/
 .idea/
