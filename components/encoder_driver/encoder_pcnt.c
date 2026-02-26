@@ -41,8 +41,10 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "sdkconfig.h"
 #include <math.h>
 #include <string.h>
+
 
 static const char *TAG = "encoder";
 
@@ -110,12 +112,13 @@ static float encoder_apply_filter(encoder_handle_t handle, float new_rpm);
  ******************************************************************************/
 
 encoder_config_t encoder_get_default_config(void) {
-  encoder_config_t config = {.gpio_a = 4,      // Default GPIO for channel A
-                             .gpio_b = 5,      // Default GPIO for channel B
-                             .ppr = 600,       // 600 pulses per revolution
-                             .filter_size = 5, // 5-sample moving average
-                             .count_high = PCNT_HIGH_LIMIT,
-                             .count_low = PCNT_LOW_LIMIT};
+  encoder_config_t config = {
+      .gpio_a = 4,               // Default GPIO for channel A
+      .gpio_b = 5,               // Default GPIO for channel B
+      .ppr = CONFIG_ENCODER_PPR, // From Kconfig (single source of truth)
+      .filter_size = 5,          // 5-sample moving average
+      .count_high = PCNT_HIGH_LIMIT,
+      .count_low = PCNT_LOW_LIMIT};
   return config;
 }
 

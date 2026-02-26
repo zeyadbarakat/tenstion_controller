@@ -155,6 +155,13 @@ system_state_t safety_check(safety_handle_t handle,
     clear_fault(handle, FAULT_ENCODER_FAILURE);
   }
 
+  // === Transition STARTING → RUNNING after successful safety check ===
+  if (handle->state == SYSTEM_STATE_STARTING &&
+      handle->active_faults == FAULT_NONE) {
+    handle->state = SYSTEM_STATE_RUNNING;
+    ESP_LOGI(TAG, "Safety checks passed - transitioning to RUNNING");
+  }
+
   // === Only check operational limits when running ===
   if (handle->state == SYSTEM_STATE_RUNNING ||
       handle->state == SYSTEM_STATE_WARNING) {

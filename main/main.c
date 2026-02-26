@@ -135,13 +135,13 @@ static esp_err_t init_wifi_ap(void) {
   ESP_ERROR_CHECK(esp_event_handler_instance_register(
       IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
 
-  // Configure AP
+  // Configure AP using Kconfig values
   wifi_config_t wifi_config = {
       .ap =
           {
-              .ssid = "TensionCTRL",
-              .ssid_len = strlen("TensionCTRL"),
-              .password = "tension123",
+              .ssid = WIFI_AP_SSID,
+              .ssid_len = strlen(WIFI_AP_SSID),
+              .password = WIFI_AP_PASSWORD,
               .channel = 1,
               .max_connection = 4,
               .authmode = WIFI_AUTH_WPA2_PSK,
@@ -152,7 +152,7 @@ static esp_err_t init_wifi_ap(void) {
   ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
   ESP_ERROR_CHECK(esp_wifi_start());
 
-  ESP_LOGI(TAG, "WiFi AP started - SSID: TensionCTRL, Password: tension123");
+  ESP_LOGI(TAG, "WiFi AP started - SSID: %s", WIFI_AP_SSID);
   ESP_LOGI(TAG, "Connect to http://192.168.4.1 for web interface");
 
   return ESP_OK;
@@ -273,11 +273,11 @@ void app_main(void) {
   init_status_led();
   init_flash_button();
 
-  // Blink LED to show startup
+  // Blink LED to show startup (blue blink)
   for (int i = 0; i < 3; i++) {
-    gpio_set_level(RGB_LED_GPIO, 1);
+    led_set_color(0, 0, 50);
     vTaskDelay(pdMS_TO_TICKS(100));
-    gpio_set_level(RGB_LED_GPIO, 0);
+    led_set_color(0, 0, 0);
     vTaskDelay(pdMS_TO_TICKS(100));
   }
 
@@ -368,10 +368,10 @@ void app_main(void) {
              esp_err_to_name(ret));
     ESP_LOGE(TAG, "System halted - check hardware connections");
     while (1) {
-      // Blink error pattern
-      gpio_set_level(RGB_LED_GPIO, 1);
+      // Blink error pattern (red)
+      led_set_color(50, 0, 0);
       vTaskDelay(pdMS_TO_TICKS(200));
-      gpio_set_level(RGB_LED_GPIO, 0);
+      led_set_color(0, 0, 0);
       vTaskDelay(pdMS_TO_TICKS(800));
     }
   }
@@ -390,7 +390,7 @@ void app_main(void) {
   ESP_LOGI(TAG, "=========================================");
   ESP_LOGI(TAG, "");
   ESP_LOGI(TAG, "Web Interface: http://192.168.4.1");
-  ESP_LOGI(TAG, "WiFi: SSID=TensionCTRL, Password=tension123");
+  ESP_LOGI(TAG, "WiFi: SSID=%s", WIFI_AP_SSID);
   ESP_LOGI(TAG, "");
   ESP_LOGI(TAG, "UART Commands:");
   ESP_LOGI(TAG, "  R     - Run/Start system");

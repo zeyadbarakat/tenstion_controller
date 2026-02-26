@@ -36,6 +36,7 @@
 #include "buttons.h"
 #include "encoder_pcnt.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -151,6 +152,20 @@ esp_err_t control_manager_init(control_manager_handle_t *handle,
   encoder_config_t enc_cfg = encoder_get_default_config();
   enc_cfg.gpio_a = config->encoder_a_gpio;
   enc_cfg.gpio_b = config->encoder_b_gpio;
+
+  // Read PPR from NVS if previously saved via web config
+  {
+    nvs_handle_t nvs_enc;
+    if (nvs_open("config", NVS_READONLY, &nvs_enc) == ESP_OK) {
+      uint16_t saved_ppr = 0;
+      if (nvs_get_u16(nvs_enc, "ppr", &saved_ppr) == ESP_OK && saved_ppr > 0) {
+        enc_cfg.ppr = saved_ppr;
+        ESP_LOGI(TAG, "Loaded PPR from NVS: %u", saved_ppr);
+      }
+      nvs_close(nvs_enc);
+    }
+  }
+
   ret = encoder_init(&enc_cfg, &mgr->encoder);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "Encoder init failed: %s", esp_err_to_name(ret));
@@ -223,27 +238,27 @@ esp_err_t control_manager_init(control_manager_handle_t *handle,
                mgr->tension_setpoint);
     }
 
-    // Load saved PI gains from previous auto-tune
-    int32_t speed_kp_x100 = 0, speed_ki_x100 = 0;
-    int32_t tension_kp_x100 = 0, tension_ki_x100 = 0;
+    // Load saved PI gains from previous auto-tune (x10000 precision)
+    int32_t speed_kp_x = 0, speed_ki_x = 0;
+    int32_t tension_kp_x = 0, tension_ki_x = 0;
 
-    if (nvs_get_i32(nvs, "speed_kp", &speed_kp_x100) == ESP_OK &&
-        nvs_get_i32(nvs, "speed_ki", &speed_ki_x100) == ESP_OK) {
-      float skp = (float)speed_kp_x100 / 100.0f;
-      float ski = (float)speed_ki_x100 / 100.0f;
-      if (skp > 0.001f && skp < 100.0f && ski > 0.0001f && ski < 50.0f) {
+    if (nvs_get_i32(nvs, "speed_kp", &speed_kp_x) == ESP_OK &&
+        nvs_get_i32(nvs, "speed_ki", &speed_ki_x) == ESP_OK) {
+      float skp = (float)speed_kp_x / 10000.0f;
+      float ski = (float)speed_ki_x / 10000.0f;
+      if (skp > 0.0001f && skp < 100.0f && ski > 0.00001f && ski < 50.0f) {
         pi_set_gains(&mgr->speed_pi, skp, ski);
-        ESP_LOGI(TAG, "Restored speed PI from NVS: Kp=%.3f Ki=%.3f", skp, ski);
+        ESP_LOGI(TAG, "Restored speed PI from NVS: Kp=%.4f Ki=%.4f", skp, ski);
       }
     }
 
-    if (nvs_get_i32(nvs, "tension_kp", &tension_kp_x100) == ESP_OK &&
-        nvs_get_i32(nvs, "tension_ki", &tension_ki_x100) == ESP_OK) {
-      float tkp = (float)tension_kp_x100 / 100.0f;
-      float tki = (float)tension_ki_x100 / 100.0f;
-      if (tkp > 0.001f && tkp < 100.0f && tki > 0.0001f && tki < 50.0f) {
+    if (nvs_get_i32(nvs, "tension_kp", &tension_kp_x) == ESP_OK &&
+        nvs_get_i32(nvs, "tension_ki", &tension_ki_x) == ESP_OK) {
+      float tkp = (float)tension_kp_x / 10000.0f;
+      float tki = (float)tension_ki_x / 10000.0f;
+      if (tkp > 0.0001f && tkp < 100.0f && tki > 0.00001f && tki < 50.0f) {
         pi_set_gains(&mgr->tension_pi, tkp, tki);
-        ESP_LOGI(TAG, "Restored tension PI from NVS: Kp=%.3f Ki=%.3f", tkp,
+        ESP_LOGI(TAG, "Restored tension PI from NVS: Kp=%.4f Ki=%.4f", tkp,
                  tki);
       }
     }
@@ -466,6 +481,15 @@ void control_manager_start_autotune(control_manager_handle_t handle,
 
   // Tuning order enforcement: speed loop must be tuned before tension
   if (!speed_loop) {
+    // Check if load cell is calibrated (required for tension autotune)
+    hx711_calibration_t cal;
+    hx711_get_calibration(handle->loadcell, &cal);
+    if (!cal.valid) {
+      ESP_LOGW(TAG, "Load cell not calibrated! Tension autotune aborted.");
+      lcd_show_message(handle->lcd, "Calibrate first!", 3000);
+      return;
+    }
+
     // Check if speed loop has valid tuning
     nvs_handle_t nvs;
     bool speed_tuned = false;
@@ -546,17 +570,23 @@ static void control_task(void *arg) {
   control_manager_handle_t mgr = (control_manager_handle_t)arg;
   TickType_t last_wake = xTaskGetTickCount();
 
-  ESP_LOGI(TAG, "Control task started");
+  // Subscribe this task to the hardware Task Watchdog Timer
+  esp_task_wdt_add(NULL);
+  ESP_LOGI(TAG, "Control task started (TWDT armed)");
 
   while (mgr->running) {
     run_control_loop(mgr);
 
-    // Feed safety watchdog
+    // Feed safety watchdog (software)
     safety_feed_watchdog(mgr->safety);
+    // Feed hardware Task Watchdog Timer
+    esp_task_wdt_reset();
 
     vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(mgr->config.control_period_ms));
   }
 
+  // Unsubscribe from TWDT before exit
+  esp_task_wdt_delete(NULL);
   ESP_LOGI(TAG, "Control task exiting");
   vTaskDelete(NULL);
 }
@@ -624,32 +654,45 @@ static void run_control_loop(control_manager_handle_t mgr) {
     if ((mgr->mode == MODE_TUNING_SPEED || mgr->mode == MODE_TUNING_TENSION) &&
         autotune_is_active(mgr->autotuner) == false &&
         autotune_is_complete(mgr->autotuner)) {
-      // Apply results
+      // Apply results to PI controller (fast, in-memory)
       pi_controller_t *target =
           (mgr->mode == MODE_TUNING_SPEED) ? &mgr->speed_pi : &mgr->tension_pi;
       autotune_apply_result(mgr->autotuner, target);
-      autotune_save_to_nvs(mgr->autotuner, (mgr->mode == MODE_TUNING_SPEED)
-                                               ? AUTOTUNE_SPEED_LOOP
-                                               : AUTOTUNE_TENSION_LOOP);
 
-      // Also save to web config namespace for UI sync
-      nvs_handle_t nvs;
-      if (nvs_open("config", NVS_READWRITE, &nvs) == ESP_OK) {
-        if (mgr->mode == MODE_TUNING_SPEED) {
-          nvs_set_i32(nvs, "speed_kp", (int32_t)(target->kp * 100.0f));
-          nvs_set_i32(nvs, "speed_ki", (int32_t)(target->ki * 100.0f));
-        } else {
-          nvs_set_i32(nvs, "tension_kp", (int32_t)(target->kp * 100.0f));
-          nvs_set_i32(nvs, "tension_ki", (int32_t)(target->ki * 100.0f));
-        }
-        nvs_commit(nvs);
-        nvs_close(nvs);
-        ESP_LOGI(TAG, "Auto-tune results saved to config: Kp=%.2f Ki=%.2f",
-                 target->kp, target->ki);
-      }
+      // Save tuning mode and gains for deferred NVS write (outside mutex)
+      bool was_speed_tune = (mgr->mode == MODE_TUNING_SPEED);
+      float saved_kp = target->kp;
+      float saved_ki = target->ki;
 
       mgr->mode = MODE_IDLE;
       lcd_show_message(mgr->lcd, "Tuning complete!", 3000);
+
+      // Release mutex BEFORE NVS writes to avoid blocking control loop
+      xSemaphoreGive(mgr->mutex);
+
+      // Deferred NVS writes (can take tens of ms)
+      autotune_save_to_nvs(mgr->autotuner, was_speed_tune
+                                               ? AUTOTUNE_SPEED_LOOP
+                                               : AUTOTUNE_TENSION_LOOP);
+
+      // Also save to web config namespace for UI sync (x10000 precision)
+      nvs_handle_t nvs;
+      if (nvs_open("config", NVS_READWRITE, &nvs) == ESP_OK) {
+        if (was_speed_tune) {
+          nvs_set_i32(nvs, "speed_kp", (int32_t)(saved_kp * 10000.0f));
+          nvs_set_i32(nvs, "speed_ki", (int32_t)(saved_ki * 10000.0f));
+        } else {
+          nvs_set_i32(nvs, "tension_kp", (int32_t)(saved_kp * 10000.0f));
+          nvs_set_i32(nvs, "tension_ki", (int32_t)(saved_ki * 10000.0f));
+        }
+        nvs_commit(nvs);
+        nvs_close(nvs);
+        ESP_LOGI(TAG, "Auto-tune results saved to config: Kp=%.4f Ki=%.4f",
+                 saved_kp, saved_ki);
+      }
+
+      // Re-take mutex to continue with status update below
+      xSemaphoreTake(mgr->mutex, portMAX_DELAY);
     }
   } else if (state == SYSTEM_STATE_FAULT ||
              state == SYSTEM_STATE_EMERGENCY_STOP) {

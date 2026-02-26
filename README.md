@@ -5,6 +5,7 @@ A production-ready cascaded PI tension control system for unwinding applications
 ![ESP32-S3](https://img.shields.io/badge/ESP32--S3-Supported-blue)
 ![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v5.5-green)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
+![Version](https://img.shields.io/badge/Version-1.1.0-orange)
 
 ## Features
 
@@ -13,9 +14,9 @@ A production-ready cascaded PI tension control system for unwinding applications
 - **Real-Time WebSocket Dashboard** — 50Hz Chart.js graphs via WebSocket push, HTTP polling fallback
 - **PCNT Quadrature Encoder** — Hardware 4x decoding, 600 PPR supported
 - **HX711 Load Cell** — 24-bit ADC with NVS calibration storage
-- **Safety Monitoring** — E-STOP, fault detection, state machine with watchdog
+- **Safety Monitoring** — E-STOP, fault detection, state machine with hardware TWDT watchdog
 - **UART Terminal** — Menu-driven LCD interface via serial
-- **Persistent Tuning** — PI gains saved to NVS, restored on boot automatically
+- **Persistent Tuning** — PI gains saved to NVS (x10000 precision), restored on boot automatically
 
 ---
 
@@ -162,7 +163,7 @@ The user only sets **tension**. The tension PI controller automatically calculat
 ### Web Interface
 
 1. Connect to WiFi:
-   - **AP Mode** (default): Connect to `TensionCTRL` (password: `tension123`)
+   - **AP Mode** (default): Connect to the AP SSID configured in menuconfig (default: `TensionAP`, password: `tension123`)
    - **Station Mode**: Configure SSID/password in menuconfig
 
 2. Open browser: `http://tension-ctrl.local` or `http://192.168.4.1`
@@ -236,7 +237,7 @@ The system uses the relay feedback method to automatically find optimal PI gains
 | Motor Stall | Detected if encoder stops while PWM active |
 | Encoder Failure | Detected if no pulses received |
 | Load Cell Failure | Detected if HX711 returns invalid data |
-| Watchdog | System restart if main loop stalls |
+| Watchdog | Hardware TWDT resets system if control task stalls |
 
 ---
 
@@ -307,6 +308,33 @@ tension_controller/
 ## License
 
 MIT License - See LICENSE file for details.
+
+---
+
+## Changelog
+
+### v1.1.0 — Bug Fixes & Robustness (Feb 2026)
+
+**Critical Bug Fixes:**
+- Fixed `SYSTEM_STATE_STARTING` never transitioning to `RUNNING` — motor now actually runs after pressing RUN
+- Fixed WebSocket clients not receiving broadcasts (registered during handshake instead of first message)
+- Fixed WS2812 LED startup blink using wrong API (`gpio_set_level` → `led_set_color`)
+- Fixed encoder PPR always using hardcoded 600 instead of NVS/Kconfig value
+- Fixed WiFi AP ignoring Kconfig SSID/password macros
+
+**Robustness Improvements:**
+- Added ESP32 hardware Task Watchdog Timer (TWDT) for control task
+- Added load cell calibration check before tension loop auto-tune
+- Increased PI gain NVS precision from x100 to x10000 (gains < 0.01 no longer lost)
+- Deferred NVS writes outside control loop mutex to prevent motor glitches
+
+> ⚠️ **NVS Migration**: PI gain format changed. Run `idf.py erase-flash` or re-run auto-tune after updating.
+
+### v1.0.0 — Initial Release
+
+- Cascaded PI control with auto-tuning
+- WebSocket real-time dashboard
+- Full safety monitoring
 
 ## Author
 

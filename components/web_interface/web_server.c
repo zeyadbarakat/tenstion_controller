@@ -282,30 +282,28 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
     uint16_t ppr = 600;
     int32_t cal_offset = 0;
     int32_t cal_scale_x1000 = 1000; // 0.001 * 1000000
-    int32_t speed_kp_x100 = 100;
-    int32_t speed_ki_x100 = 10;
-    int32_t tension_kp_x100 = 200;
-    int32_t tension_ki_x100 = 5;
+    int32_t speed_kp_x = 5000;
+    int32_t speed_ki_x = 1000;
+    int32_t tension_kp_x = 2000;
+    int32_t tension_ki_x = 500;
 
     nvs_get_u16(nvs, "ppr", &ppr);
     nvs_get_i32(nvs, "cal_offset", &cal_offset);
     nvs_get_i32(nvs, "cal_scale", &cal_scale_x1000);
-    nvs_get_i32(nvs, "speed_kp", &speed_kp_x100);
-    nvs_get_i32(nvs, "speed_ki", &speed_ki_x100);
-    nvs_get_i32(nvs, "tension_kp", &tension_kp_x100);
-    nvs_get_i32(nvs, "tension_ki", &tension_ki_x100);
+    nvs_get_i32(nvs, "speed_kp", &speed_kp_x);
+    nvs_get_i32(nvs, "speed_ki", &speed_ki_x);
+    nvs_get_i32(nvs, "tension_kp", &tension_kp_x);
+    nvs_get_i32(nvs, "tension_ki", &tension_ki_x);
     nvs_close(nvs);
 
     cJSON_AddNumberToObject(root, "ppr", ppr);
     cJSON_AddNumberToObject(root, "cal_offset", cal_offset);
     cJSON_AddNumberToObject(root, "cal_scale",
                             (float)cal_scale_x1000 / 1000000.0f);
-    cJSON_AddNumberToObject(root, "speed_kp", (float)speed_kp_x100 / 100.0f);
-    cJSON_AddNumberToObject(root, "speed_ki", (float)speed_ki_x100 / 100.0f);
-    cJSON_AddNumberToObject(root, "tension_kp",
-                            (float)tension_kp_x100 / 100.0f);
-    cJSON_AddNumberToObject(root, "tension_ki",
-                            (float)tension_ki_x100 / 100.0f);
+    cJSON_AddNumberToObject(root, "speed_kp", (float)speed_kp_x / 10000.0f);
+    cJSON_AddNumberToObject(root, "speed_ki", (float)speed_ki_x / 10000.0f);
+    cJSON_AddNumberToObject(root, "tension_kp", (float)tension_kp_x / 10000.0f);
+    cJSON_AddNumberToObject(root, "tension_ki", (float)tension_ki_x / 10000.0f);
     cJSON_AddBoolToObject(root, "loaded", true);
   } else {
     // Defaults
@@ -369,19 +367,19 @@ static esp_err_t api_config_post_handler(httpd_req_t *req) {
     ESP_LOGI(TAG, "Saved cal_scale: %f", item->valuedouble);
   }
   if ((item = cJSON_GetObjectItem(root, "speed_kp")) != NULL) {
-    nvs_set_i32(nvs, "speed_kp", (int32_t)(item->valuedouble * 100.0));
+    nvs_set_i32(nvs, "speed_kp", (int32_t)(item->valuedouble * 10000.0));
     ESP_LOGI(TAG, "Saved speed_kp: %f", item->valuedouble);
   }
   if ((item = cJSON_GetObjectItem(root, "speed_ki")) != NULL) {
-    nvs_set_i32(nvs, "speed_ki", (int32_t)(item->valuedouble * 100.0));
+    nvs_set_i32(nvs, "speed_ki", (int32_t)(item->valuedouble * 10000.0));
     ESP_LOGI(TAG, "Saved speed_ki: %f", item->valuedouble);
   }
   if ((item = cJSON_GetObjectItem(root, "tension_kp")) != NULL) {
-    nvs_set_i32(nvs, "tension_kp", (int32_t)(item->valuedouble * 100.0));
+    nvs_set_i32(nvs, "tension_kp", (int32_t)(item->valuedouble * 10000.0));
     ESP_LOGI(TAG, "Saved tension_kp: %f", item->valuedouble);
   }
   if ((item = cJSON_GetObjectItem(root, "tension_ki")) != NULL) {
-    nvs_set_i32(nvs, "tension_ki", (int32_t)(item->valuedouble * 100.0));
+    nvs_set_i32(nvs, "tension_ki", (int32_t)(item->valuedouble * 10000.0));
     ESP_LOGI(TAG, "Saved tension_ki: %f", item->valuedouble);
   }
 
@@ -431,8 +429,10 @@ static esp_err_t ws_handler(httpd_req_t *req) {
   struct web_server_s *srv = (struct web_server_s *)req->user_ctx;
 
   if (req->method == HTTP_GET) {
-    // This is the initial handshake - client is connecting
-    ESP_LOGI(TAG, "WebSocket handshake from fd=%d", httpd_req_to_sockfd(req));
+    // This is the initial handshake - register client immediately
+    int fd = httpd_req_to_sockfd(req);
+    ESP_LOGI(TAG, "WebSocket handshake from fd=%d", fd);
+    ws_client_add(srv, fd);
     return ESP_OK;
   }
 
