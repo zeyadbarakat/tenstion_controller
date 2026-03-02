@@ -47,7 +47,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 static const char *TAG = "hx711";
 
 /*******************************************************************************
@@ -87,6 +86,8 @@ struct hx711_s {
   int32_t filter_buffer[MAX_FILTER_SIZE];
   uint8_t filter_index;
   bool filter_filled;
+  float ema_alpha;      // EMA smoothing factor (0.01-1.0, lower = smoother)
+  bool ema_initialized; // First sample flag
 
   // Current values
   int32_t raw_value;
@@ -119,7 +120,7 @@ hx711_config_t hx711_get_default_config(void) {
       .gpio_data = 6,
       .gpio_clock = 7,
       .gain = HX711_GAIN_128_CH_A,
-      .filter_size = 10,
+      .filter_size = 20,
       .median_size = 5,
   };
   return config;
@@ -158,6 +159,12 @@ esp_err_t hx711_init(const hx711_config_t *config, hx711_handle_t *handle) {
   hx->filter_size = config->filter_size;
   hx->median_size = config->median_size;
   hx->scale = 1.0f; // Default scale (raw values)
+#ifdef CONFIG_HX711_EMA_ALPHA
+  hx->ema_alpha = CONFIG_HX711_EMA_ALPHA / 100.0f;
+#else
+  hx->ema_alpha = 0.1f;
+#endif
+  hx->ema_initialized = false;
 
   // Create mutex
   hx->mutex = xSemaphoreCreateMutex();
@@ -341,12 +348,26 @@ float hx711_update(hx711_handle_t handle) {
 
   xSemaphoreTake(handle->mutex, portMAX_DELAY);
 
-  // Apply moving average
+  // Apply moving average on raw values
   int32_t filtered = hx711_moving_average(handle, raw);
 
-  // Calculate weight if calibrated
+  // Calculate instantaneous weight
+  float instant_weight;
   if (handle->calibrated && handle->scale != 0) {
-    handle->weight_kg = (float)(filtered - handle->offset) / handle->scale;
+    instant_weight = (float)(filtered - handle->offset) / handle->scale;
+  } else if (handle->offset != 0) {
+    instant_weight = (float)(filtered - handle->offset) / 1000.0f;
+  } else {
+    instant_weight = (float)filtered / 100000.0f;
+  }
+
+  // Apply EMA (Exponential Moving Average) for smooth output
+  if (!handle->ema_initialized) {
+    handle->weight_kg = instant_weight;
+    handle->ema_initialized = true;
+  } else {
+    handle->weight_kg +=
+        handle->ema_alpha * (instant_weight - handle->weight_kg);
   }
 
   float result = handle->weight_kg;
@@ -380,6 +401,17 @@ esp_err_t hx711_tare(hx711_handle_t handle, uint8_t samples) {
   xSemaphoreGive(handle->mutex);
 
   ESP_LOGI(TAG, "Tare complete: offset = %ld", (long)handle->offset);
+
+  // Save ONLY offset to NVS (don't touch scale)
+  {
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+      nvs_set_i32(nvs, NVS_KEY_OFFSET, handle->offset);
+      nvs_commit(nvs);
+      nvs_close(nvs);
+      ESP_LOGI(TAG, "Tare offset saved to NVS");
+    }
+  }
 
   return ESP_OK;
 }
@@ -519,31 +551,42 @@ esp_err_t hx711_load_calibration(hx711_handle_t handle) {
     return ret;
   }
 
-  int32_t offset;
-  ret = nvs_get_i32(nvs, NVS_KEY_OFFSET, &offset);
-  if (ret != ESP_OK) {
-    nvs_close(nvs);
-    return ret;
+  // Load offset and scale INDEPENDENTLY
+  // (tare only saves offset, so scale may not exist yet)
+  bool has_offset = false, has_scale = false;
+  int32_t offset = 0;
+  float scale = 1.0f;
+
+  if (nvs_get_i32(nvs, NVS_KEY_OFFSET, &offset) == ESP_OK) {
+    has_offset = true;
   }
 
-  float scale;
   size_t size = sizeof(float);
-  ret = nvs_get_blob(nvs, NVS_KEY_SCALE, &scale, &size);
-  if (ret != ESP_OK) {
-    nvs_close(nvs);
-    return ret;
+  if (nvs_get_blob(nvs, NVS_KEY_SCALE, &scale, &size) == ESP_OK) {
+    has_scale = true;
   }
 
   nvs_close(nvs);
 
+  if (!has_offset && !has_scale) {
+    ESP_LOGW(TAG, "No calibration data in NVS");
+    return ESP_ERR_NVS_NOT_FOUND;
+  }
+
   xSemaphoreTake(handle->mutex, portMAX_DELAY);
-  handle->offset = offset;
-  handle->scale = scale;
-  handle->calibrated = true;
+  if (has_offset) {
+    handle->offset = offset;
+  }
+  if (has_scale && scale != 0.0f && scale != 1.0f) {
+    handle->scale = scale;
+    handle->calibrated = true;
+  }
   xSemaphoreGive(handle->mutex);
 
-  ESP_LOGI(TAG, "Calibration loaded: offset=%ld, scale=%.2f", (long)offset,
-           scale);
+  ESP_LOGI(TAG,
+           "Calibration loaded: offset=%ld (found=%d), scale=%.6f (found=%d), "
+           "calibrated=%d",
+           (long)offset, has_offset, scale, has_scale, handle->calibrated);
 
   return ESP_OK;
 }
@@ -699,4 +742,39 @@ static int32_t hx711_moving_average(hx711_handle_t handle, int32_t new_value) {
   }
 
   return (count > 0) ? (int32_t)(sum / count) : new_value;
+}
+
+void hx711_set_ema_alpha(hx711_handle_t handle, float alpha) {
+  if (handle == NULL)
+    return;
+  if (alpha < 0.01f)
+    alpha = 0.01f;
+  if (alpha > 1.0f)
+    alpha = 1.0f;
+
+  xSemaphoreTake(handle->mutex, portMAX_DELAY);
+  handle->ema_alpha = alpha;
+  xSemaphoreGive(handle->mutex);
+
+  ESP_LOGI(TAG, "EMA alpha set to %.2f", alpha);
+}
+
+void hx711_set_filter_size(hx711_handle_t handle, uint8_t size) {
+  if (handle == NULL)
+    return;
+  if (size < 1)
+    size = 1;
+  if (size > MAX_FILTER_SIZE)
+    size = MAX_FILTER_SIZE;
+
+  xSemaphoreTake(handle->mutex, portMAX_DELAY);
+  // Only change size - let the circular buffer adapt naturally
+  // Don't reset filter_index or filter_filled to avoid noise spike
+  handle->filter_size = size;
+  if (handle->filter_index >= size) {
+    handle->filter_index = 0;
+  }
+  xSemaphoreGive(handle->mutex);
+
+  ESP_LOGI(TAG, "Filter size set to %d", size);
 }

@@ -41,7 +41,11 @@ typedef enum {
   WEB_CMD_SAVE_CONFIG,
   // Jog mode commands (when stopped)
   WEB_CMD_JOG_START = 20, // value: -1 = left, +1 = right
-  WEB_CMD_JOG_STOP = 21
+  WEB_CMD_JOG_STOP = 21,
+  WEB_CMD_SET_EMA_ALPHA = 22,  // value: alpha * 100 (1-100)
+  WEB_CMD_SET_MA_WINDOW = 23,  // value: window size (1-50)
+  WEB_CMD_SET_CAL_OFFSET = 24, // value: offset (int32)
+  WEB_CMD_SET_CAL_SCALE = 25   // value: scale (float)
 } web_command_t;
 
 typedef void (*web_command_callback_t)(web_command_t cmd, float value,

@@ -145,7 +145,11 @@ system_state_t safety_check(safety_handle_t handle,
     clear_fault(handle, FAULT_LOADCELL_FAILURE);
   }
 
-  if (!readings->encoder_active && handle->state == SYSTEM_STATE_RUNNING) {
+  // Encoder failure: only check when RUNNING AND motor is actually driving
+  // Must provide enough PWM to overcome static friction before expecting
+  // movement
+  if (!readings->encoder_active && handle->state == SYSTEM_STATE_RUNNING &&
+      readings->pwm_percent > 15.0f) {
     int64_t idle_time_ms = (now - handle->last_encoder_pulse_us) / 1000;
     if (idle_time_ms > handle->limits.encoder_timeout_ms) {
       set_fault(handle, FAULT_ENCODER_FAILURE);
@@ -225,6 +229,12 @@ system_state_t safety_check(safety_handle_t handle,
   if (handle->active_faults != FAULT_NONE &&
       handle->state != SYSTEM_STATE_EMERGENCY_STOP) {
     handle->state = SYSTEM_STATE_FAULT;
+  } else if (handle->active_faults == FAULT_NONE &&
+             (handle->state == SYSTEM_STATE_FAULT ||
+              handle->state == SYSTEM_STATE_EMERGENCY_STOP)) {
+    // Auto-recover: all faults cleared → return to IDLE
+    handle->state = SYSTEM_STATE_IDLE;
+    ESP_LOGI(TAG, "All faults cleared - returning to IDLE");
   }
 
   // Log state transitions

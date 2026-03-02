@@ -294,6 +294,13 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
     nvs_get_i32(nvs, "speed_ki", &speed_ki_x);
     nvs_get_i32(nvs, "tension_kp", &tension_kp_x);
     nvs_get_i32(nvs, "tension_ki", &tension_ki_x);
+
+    int32_t ema_alpha_x100 = 10; // default 0.10
+    nvs_get_i32(nvs, "ema_alpha", &ema_alpha_x100);
+
+    int32_t ma_window = 20;
+    nvs_get_i32(nvs, "ma_window", &ma_window);
+
     nvs_close(nvs);
 
     cJSON_AddNumberToObject(root, "ppr", ppr);
@@ -304,6 +311,8 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "speed_ki", (float)speed_ki_x / 10000.0f);
     cJSON_AddNumberToObject(root, "tension_kp", (float)tension_kp_x / 10000.0f);
     cJSON_AddNumberToObject(root, "tension_ki", (float)tension_ki_x / 10000.0f);
+    cJSON_AddNumberToObject(root, "ema_alpha", (float)ema_alpha_x100 / 100.0f);
+    cJSON_AddNumberToObject(root, "ma_window", ma_window);
     cJSON_AddBoolToObject(root, "loaded", true);
   } else {
     // Defaults
@@ -314,6 +323,8 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "speed_ki", 0.1);
     cJSON_AddNumberToObject(root, "tension_kp", 2.0);
     cJSON_AddNumberToObject(root, "tension_ki", 0.05);
+    cJSON_AddNumberToObject(root, "ema_alpha", 0.10);
+    cJSON_AddNumberToObject(root, "ma_window", 20);
     cJSON_AddBoolToObject(root, "loaded", false);
   }
 
@@ -358,13 +369,26 @@ static esp_err_t api_config_post_handler(httpd_req_t *req) {
     nvs_set_u16(nvs, "ppr", (uint16_t)item->valueint);
     ESP_LOGI(TAG, "Saved PPR: %d", item->valueint);
   }
-  if ((item = cJSON_GetObjectItem(root, "cal_offset")) != NULL) {
-    nvs_set_i32(nvs, "cal_offset", (int32_t)item->valueint);
-    ESP_LOGI(TAG, "Saved cal_offset: %d", item->valueint);
-  }
+  // NOTE: cal_offset is NOT handled here - it is managed exclusively
+  // by the Tare button (cmd 5) to prevent accidental overwrites.
   if ((item = cJSON_GetObjectItem(root, "cal_scale")) != NULL) {
-    nvs_set_i32(nvs, "cal_scale", (int32_t)(item->valuedouble * 1000000.0));
-    ESP_LOGI(TAG, "Saved cal_scale: %f", item->valuedouble);
+    float cal_sc = (float)item->valuedouble;
+    nvs_set_i32(nvs, "cal_scale", (int32_t)(cal_sc * 1000000.0));
+    ESP_LOGI(TAG, "Saved cal_scale: %f", cal_sc);
+
+    // Also save to loadcell NVS namespace for HX711 driver
+    nvs_handle_t lc_nvs;
+    if (nvs_open("loadcell", NVS_READWRITE, &lc_nvs) == ESP_OK) {
+      nvs_set_blob(lc_nvs, "scale", &cal_sc, sizeof(float));
+      nvs_commit(lc_nvs);
+      nvs_close(lc_nvs);
+    }
+
+    // Apply immediately via command 25
+    struct web_server_s *srv = (struct web_server_s *)req->user_ctx;
+    if (srv && srv->cmd_callback) {
+      srv->cmd_callback(25, cal_sc, srv->cmd_user_data);
+    }
   }
   if ((item = cJSON_GetObjectItem(root, "speed_kp")) != NULL) {
     nvs_set_i32(nvs, "speed_kp", (int32_t)(item->valuedouble * 10000.0));
@@ -381,6 +405,27 @@ static esp_err_t api_config_post_handler(httpd_req_t *req) {
   if ((item = cJSON_GetObjectItem(root, "tension_ki")) != NULL) {
     nvs_set_i32(nvs, "tension_ki", (int32_t)(item->valuedouble * 10000.0));
     ESP_LOGI(TAG, "Saved tension_ki: %f", item->valuedouble);
+  }
+  if ((item = cJSON_GetObjectItem(root, "ema_alpha")) != NULL) {
+    int32_t alpha_int = item->valueint;
+    nvs_set_i32(nvs, "ema_alpha", alpha_int);
+    ESP_LOGI(TAG, "Saved ema_alpha: %d (%.2f)", alpha_int, alpha_int / 100.0f);
+
+    // Apply immediately via command callback (cmd=22 = set EMA alpha)
+    struct web_server_s *srv = (struct web_server_s *)req->user_ctx;
+    if (srv && srv->cmd_callback) {
+      srv->cmd_callback(22, (float)alpha_int, srv->cmd_user_data);
+    }
+  }
+  if ((item = cJSON_GetObjectItem(root, "ma_window")) != NULL) {
+    int32_t win = item->valueint;
+    nvs_set_i32(nvs, "ma_window", win);
+    ESP_LOGI(TAG, "Saved ma_window: %d", win);
+
+    struct web_server_s *srv = (struct web_server_s *)req->user_ctx;
+    if (srv && srv->cmd_callback) {
+      srv->cmd_callback(23, (float)win, srv->cmd_user_data);
+    }
   }
 
   nvs_commit(nvs);

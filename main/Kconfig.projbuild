@@ -15,13 +15,13 @@ menu "Tension Controller Configuration"
 
         config HX711_GPIO_DATA
             int "HX711 Data GPIO"
-            default 6
+            default 13
             help
                 GPIO pin for HX711 data line (DOUT)
 
         config HX711_GPIO_CLOCK
             int "HX711 Clock GPIO"
-            default 7
+            default 14
             help
                 GPIO pin for HX711 clock line (SCK)
 
@@ -78,6 +78,36 @@ menu "Tension Controller Configuration"
             default 18
             help
                 GPIO pin for red fault indicator LED
+
+        config KEY_GPIO_1
+            int "Keypad Key1 (▲) GPIO"
+            default 1
+            help
+                GPIO pin for keypad key 1 (tension up / menu enter)
+
+        config KEY_GPIO_2
+            int "Keypad Key2 (▼) GPIO"
+            default 2
+            help
+                GPIO pin for keypad key 2 (tension down / menu OK)
+
+        config KEY_GPIO_3
+            int "Keypad Key3 (◄) GPIO"
+            default 6
+            help
+                GPIO pin for keypad key 3 (jog left / menu navigate)
+
+        config KEY_GPIO_4
+            int "Keypad Key4 (►) GPIO"
+            default 7
+            help
+                GPIO pin for keypad key 4 (jog right / menu navigate)
+
+        config LCD_I2C_ADDR
+            hex "LCD I2C Address"
+            default 0x27
+            help
+                I2C address of the PCF8574 LCD backpack (0x27 or 0x3F)
     endmenu
 
     menu "Encoder Configuration"
@@ -111,11 +141,21 @@ menu "Tension Controller Configuration"
 
     menu "Load Cell Configuration"
         config HX711_FILTER_SIZE
-            int "HX711 Filter Window Size"
-            default 10
+            int "HX711 Moving Average Window"
+            default 20
             range 1 50
             help
-                Moving average filter window size for load cell readings
+                Moving average filter window size for raw load cell readings.
+                Higher = smoother but slower response. Default: 20
+
+        config HX711_EMA_ALPHA
+            int "HX711 EMA Smoothing (1-100)"
+            default 10
+            range 1 100
+            help
+                Exponential Moving Average factor (value / 100).
+                1 = very smooth (slow response), 100 = no smoothing (noisy).
+                Recommended: 5-20 for tension control. Default: 10 (alpha=0.10)
 
         config HX711_SAMPLE_RATE_80HZ
             bool "Use 80Hz Sample Rate"

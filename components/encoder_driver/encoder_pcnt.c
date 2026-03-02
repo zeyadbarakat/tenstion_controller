@@ -45,7 +45,6 @@
 #include <math.h>
 #include <string.h>
 
-
 static const char *TAG = "encoder";
 
 /*******************************************************************************
@@ -486,4 +485,19 @@ static float encoder_apply_filter(encoder_handle_t handle, float new_rpm) {
   }
 
   return (count > 0) ? (sum / (float)count) : 0.0f;
+}
+
+uint32_t encoder_get_ppr(encoder_handle_t handle) {
+  if (handle == NULL)
+    return 0;
+  return handle->ppr;
+}
+
+void encoder_set_ppr(encoder_handle_t handle, uint32_t ppr) {
+  if (handle == NULL || ppr == 0)
+    return;
+  handle->ppr = ppr;
+  handle->cpr = ppr * 4;
+  ESP_LOGI(TAG, "PPR updated to %lu, CPR=%lu", (unsigned long)ppr,
+           (unsigned long)(ppr * 4));
 }

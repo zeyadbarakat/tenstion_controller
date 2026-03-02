@@ -253,6 +253,19 @@ static void web_command_cb(web_command_t cmd, float value, void *user_data) {
     ESP_LOGI(TAG, "Jog stop");
     control_manager_jog(g_ctrl_mgr, 0.0f);
     break;
+  case WEB_CMD_SET_EMA_ALPHA:
+    // value is alpha * 100 (e.g., 10 = 0.10)
+    control_manager_set_ema_alpha(g_ctrl_mgr, value / 100.0f);
+    break;
+  case WEB_CMD_SET_MA_WINDOW:
+    control_manager_set_filter_size(g_ctrl_mgr, (uint8_t)value);
+    break;
+  case WEB_CMD_SET_CAL_OFFSET:
+    control_manager_set_cal_offset(g_ctrl_mgr, (int32_t)value);
+    break;
+  case WEB_CMD_SET_CAL_SCALE:
+    control_manager_set_cal_scale(g_ctrl_mgr, value);
+    break;
   default:
     break;
   }

@@ -514,11 +514,29 @@
         <!-- Calibration Tab -->
         <div class="tab-pane" id="tab-calib">
             <div class="row"><span class="lbl">Raw ADC:</span><span id="raw-adc">--</span></div>
-            <div class="row"><span class="lbl">Offset:</span><input type="number" id="cal-offset" value="0"></div>
-            <div class="row"><span class="lbl">Scale:</span><input type="number" id="cal-scale" step="0.0001"
-                    value="0.001"></div>
+            <div class="row"><span class="lbl">Scale (units/kg):</span><input type="number" id="cal-scale" step="0.1"
+                    value="1"></div>
             <div class="row"><button class="btn-sm btn-blue" onclick="cmd(5)">⚖️ Tare (Zero)</button><button
-                    class="btn-sm btn-gray" onclick="saveCalib()">💾 Save</button></div>
+                    class="btn-sm btn-gray" onclick="saveCalib()">💾 Save Scale</button></div>
+            <div style="border-top:1px solid #374151; margin:10px 0; padding-top:10px;">
+                <div style="font-size:0.8rem; color:#94a3b8; margin-bottom:6px; font-weight:600;">🔧 Filter Settings
+                </div>
+                <div class="row"><span class="lbl">MA Window:</span>
+                    <input type="range" id="ma-slider" min="1" max="50" value="20" style="flex:1;"
+                        oninput="document.getElementById('ma-val').textContent=this.value">
+                    <span id="ma-val" style="width:30px; text-align:right; color:#22c55e;">20</span>
+                </div>
+                <div style="font-size:0.65rem; color:#64748b; margin-bottom:8px;">Raw ADC averaging window (1-50).
+                    Higher = smoother raw</div>
+                <div class="row"><span class="lbl">EMA Alpha:</span>
+                    <input type="range" id="ema-slider" min="1" max="100" value="10" style="flex:1;"
+                        oninput="document.getElementById('ema-val').textContent=this.value">
+                    <span id="ema-val" style="width:30px; text-align:right; color:#60a5fa;">10</span>
+                </div>
+                <div style="font-size:0.65rem; color:#64748b; margin-bottom:8px;">Output smoothing (1=smooth/slow ·
+                    100=raw/fast)</div>
+                <button class="btn-sm btn-blue" onclick="saveFilter()">💾 Apply Filter</button>
+            </div>
         </div>
         <!-- Logs Tab -->
         <div class="tab-pane" id="tab-logs">
@@ -759,16 +777,27 @@
             }).catch(() => alert('Error saving PPR'));
         }
         function saveCalib() {
-            const offset = parseInt(document.getElementById('cal-offset').value);
             const scale = parseFloat(document.getElementById('cal-scale').value);
             fetch('/api/config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cal_offset: offset, cal_scale: scale })
+                body: JSON.stringify({ cal_scale: scale })
             }).then(r => r.json()).then(d => {
-                if (d.saved) alert('Calibration saved to NVS!');
+                if (d.saved) alert('Scale saved! (Offset is set by Tare)');
                 else alert('Save failed');
             }).catch(() => alert('Error saving calibration'));
+        }
+        function saveFilter() {
+            const alpha = parseInt(document.getElementById('ema-slider').value);
+            const maWin = parseInt(document.getElementById('ma-slider').value);
+            fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ema_alpha: alpha, ma_window: maWin })
+            }).then(r => r.json()).then(d => {
+                if (d.saved) alert('Filter applied! MA=' + maWin + ', EMA=' + (alpha / 100).toFixed(2));
+                else alert('Save failed');
+            }).catch(() => alert('Error saving filter'));
         }
         function setTuning() {
             const speedKp = parseFloat(document.getElementById('speed-kp').value);
@@ -797,6 +826,15 @@
                 if (cfg.speed_ki !== undefined) document.getElementById('speed-ki').value = parseFloat(cfg.speed_ki).toFixed(2);
                 if (cfg.tension_kp !== undefined) document.getElementById('tension-kp').value = parseFloat(cfg.tension_kp).toFixed(2);
                 if (cfg.tension_ki !== undefined) document.getElementById('tension-ki').value = parseFloat(cfg.tension_ki).toFixed(2);
+                if (cfg.ema_alpha !== undefined) {
+                    const v = Math.round(cfg.ema_alpha * 100);
+                    document.getElementById('ema-slider').value = v;
+                    document.getElementById('ema-val').textContent = v;
+                }
+                if (cfg.ma_window !== undefined) {
+                    document.getElementById('ma-slider').value = cfg.ma_window;
+                    document.getElementById('ma-val').textContent = cfg.ma_window;
+                }
                 console.log('Config loaded:', cfg);
             }).catch(e => console.log('Config load error:', e));
         }

@@ -23,7 +23,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -273,6 +272,22 @@ esp_err_t hx711_power_up(hx711_handle_t handle);
  * @return Default configuration structure
  */
 hx711_config_t hx711_get_default_config(void);
+
+/**
+ * @brief Set EMA smoothing factor at runtime
+ *
+ * @param[in] handle    HX711 handle
+ * @param[in] alpha     EMA factor (0.01 - 1.0). Lower = smoother.
+ */
+void hx711_set_ema_alpha(hx711_handle_t handle, float alpha);
+
+/**
+ * @brief Set moving average filter window at runtime
+ *
+ * @param[in] handle    HX711 handle
+ * @param[in] size      Window size (1-50)
+ */
+void hx711_set_filter_size(hx711_handle_t handle, uint8_t size);
 
 #ifdef __cplusplus
 }

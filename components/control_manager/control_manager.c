@@ -49,6 +49,7 @@
 #include "pi_controller.h"
 #include "relay_feedback.h"
 #include "safety.h"
+#include "sdkconfig.h"
 #include <math.h>
 #include <string.h>
 
@@ -82,6 +83,7 @@ struct control_manager_s {
   control_mode_t mode;
   float tension_setpoint;
   float speed_setpoint;
+  float tension_step; /* Configurable step for ▲/▼ keys */
   system_status_t status;
   int64_t start_time_us;
 
@@ -102,6 +104,7 @@ static void control_task(void *arg);
 static void ui_task(void *arg);
 static void on_button_event(button_event_t event, void *user_data);
 static void on_lcd_command(uint8_t command, float value, void *user_data);
+static void on_menu_command(lcd_command_id_t cmd, float value, void *user_data);
 static void run_control_loop(control_manager_handle_t mgr);
 
 /*******************************************************************************
@@ -112,8 +115,8 @@ control_manager_config_t control_manager_get_default_config(void) {
   control_manager_config_t config = {
       .encoder_a_gpio = 4,
       .encoder_b_gpio = 5,
-      .hx711_data_gpio = 6,
-      .hx711_clock_gpio = 7,
+      .hx711_data_gpio = CONFIG_HX711_GPIO_DATA,
+      .hx711_clock_gpio = CONFIG_HX711_GPIO_CLOCK,
       .motor_pwm_gpio = 15,
       .motor_dir_gpio = 16,
       .button_run_gpio = 10,
@@ -175,6 +178,7 @@ esp_err_t control_manager_init(control_manager_handle_t *handle,
   hx711_config_t hx_cfg = hx711_get_default_config();
   hx_cfg.gpio_data = config->hx711_data_gpio;
   hx_cfg.gpio_clock = config->hx711_clock_gpio;
+  hx_cfg.filter_size = CONFIG_HX711_FILTER_SIZE;
   ret = hx711_init(&hx_cfg, &mgr->loadcell);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "HX711 init failed: %s", esp_err_to_name(ret));
@@ -182,6 +186,22 @@ esp_err_t control_manager_init(control_manager_handle_t *handle,
 
   // Load calibration from NVS
   hx711_load_calibration(mgr->loadcell);
+
+  // Load filter settings from NVS (web-configured values)
+  {
+    nvs_handle_t nvs_filt;
+    if (nvs_open("config", NVS_READONLY, &nvs_filt) == ESP_OK) {
+      int32_t ema_val = 0, ma_val = 0;
+      if (nvs_get_i32(nvs_filt, "ema_alpha", &ema_val) == ESP_OK &&
+          ema_val > 0) {
+        hx711_set_ema_alpha(mgr->loadcell, (float)ema_val / 100.0f);
+      }
+      if (nvs_get_i32(nvs_filt, "ma_window", &ma_val) == ESP_OK && ma_val > 0) {
+        hx711_set_filter_size(mgr->loadcell, (uint8_t)ma_val);
+      }
+      nvs_close(nvs_filt);
+    }
+  }
 
   // === Initialize Motor ===
   motor_config_t mot_cfg = motor_get_default_config();
@@ -219,12 +239,24 @@ esp_err_t control_manager_init(control_manager_handle_t *handle,
   buttons_init(&mgr->buttons, &btn_cfg);
   buttons_register_callback(mgr->buttons, on_button_event, mgr);
 
-  // === Initialize LCD ===
-  lcd_init(&mgr->lcd, 1); // UART1
+  // === Initialize LCD (I2C 20x4 + 1x4 Keypad) ===
+  lcd_config_t lcd_cfg = {
+      .sda_gpio = CONFIG_LCD_GPIO_SDA,
+      .scl_gpio = CONFIG_LCD_GPIO_SCL,
+      .i2c_addr = CONFIG_LCD_I2C_ADDR,
+      .key_gpios = {CONFIG_KEY_GPIO_1, CONFIG_KEY_GPIO_2, CONFIG_KEY_GPIO_3,
+                    CONFIG_KEY_GPIO_4},
+  };
+  ret = lcd_init(&mgr->lcd, &lcd_cfg);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "LCD init failed: %s", esp_err_to_name(ret));
+  }
   lcd_set_callback(mgr->lcd, on_lcd_command, mgr);
+  lcd_set_menu_callback(mgr->lcd, on_menu_command, mgr);
 
   // Set defaults
   mgr->tension_setpoint = config->default_tension_setpoint;
+  mgr->tension_step = 0.5f;
   mgr->mode = MODE_IDLE;
   mgr->start_time_us = esp_timer_get_time();
 
@@ -451,7 +483,13 @@ esp_err_t control_manager_reset_faults(control_manager_handle_t handle) {
   // Try to reset button latch first (if hardware released)
   buttons_reset_estop(handle->buttons);
 
-  return safety_reset_fault(handle->safety);
+  esp_err_t ret = safety_reset_fault(handle->safety);
+  if (ret == ESP_OK) {
+    // Reset mode so jog/restart works after fault recovery
+    handle->mode = MODE_IDLE;
+    ESP_LOGI(TAG, "Faults cleared, mode reset to IDLE");
+  }
+  return ret;
 }
 
 void control_manager_start_tare(control_manager_handle_t handle) {
@@ -478,6 +516,12 @@ void control_manager_start_autotune(control_manager_handle_t handle,
                                     bool speed_loop) {
   if (handle == NULL)
     return;
+
+  if (!safety_is_safe_to_start(handle->safety)) {
+    ESP_LOGW(TAG, "Cannot start auto-tune - not safe to run");
+    lcd_show_message(handle->lcd, "Safety Not Ready!", 3000);
+    return;
+  }
 
   // Tuning order enforcement: speed loop must be tuned before tension
   if (!speed_loop) {
@@ -506,6 +550,12 @@ void control_manager_start_autotune(control_manager_handle_t handle,
       lcd_show_message(handle->lcd, "Tune SPEED first!", 3000);
       return;
     }
+  }
+
+  esp_err_t ret = safety_request_start(handle->safety);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to transition to STARTING state for auto-tune");
+    return;
   }
 
   autotune_config_t cfg = autotune_get_default_config();
@@ -562,6 +612,40 @@ void control_manager_jog(control_manager_handle_t handle, float speed_percent) {
   }
 }
 
+void control_manager_set_ema_alpha(control_manager_handle_t handle,
+                                   float alpha) {
+  if (handle == NULL || handle->loadcell == NULL)
+    return;
+  hx711_set_ema_alpha(handle->loadcell, alpha);
+}
+
+void control_manager_set_filter_size(control_manager_handle_t handle,
+                                     uint8_t size) {
+  if (handle == NULL || handle->loadcell == NULL)
+    return;
+  hx711_set_filter_size(handle->loadcell, size);
+}
+
+void control_manager_set_cal_offset(control_manager_handle_t handle,
+                                    int32_t offset) {
+  if (handle == NULL || handle->loadcell == NULL)
+    return;
+  hx711_calibration_t cal;
+  hx711_get_calibration(handle->loadcell, &cal);
+  hx711_set_calibration(handle->loadcell, offset, cal.scale);
+  ESP_LOGI(TAG, "Cal offset set to %ld", (long)offset);
+}
+
+void control_manager_set_cal_scale(control_manager_handle_t handle,
+                                   float scale) {
+  if (handle == NULL || handle->loadcell == NULL || scale == 0.0f)
+    return;
+  hx711_calibration_t cal;
+  hx711_get_calibration(handle->loadcell, &cal);
+  hx711_set_calibration(handle->loadcell, cal.offset, scale);
+  ESP_LOGI(TAG, "Cal scale set to %.6f", scale);
+}
+
 /*******************************************************************************
  * Private Function Implementations
  ******************************************************************************/
@@ -593,7 +677,8 @@ static void control_task(void *arg) {
 
 static void run_control_loop(control_manager_handle_t mgr) {
   // === Read Sensors ===
-  float speed_rpm = encoder_update(mgr->encoder);
+  encoder_update(mgr->encoder); // Update internal RPM calculation
+  float speed_rpm = encoder_get_rpm(mgr->encoder); // Get actual RPM value
   float tension_kg = hx711_update(mgr->loadcell);
 
   // === Safety Check ===
@@ -609,8 +694,9 @@ static void run_control_loop(control_manager_handle_t mgr) {
   system_state_t state = safety_check(mgr->safety, &readings);
 
   // === Control Output ===
-  float pwm_output = 0.0f;
   float speed_setpoint = 0.0f;
+  float new_pwm_output = motor_get_speed(mgr->motor);
+  bool update_motor = false;
 
   xSemaphoreTake(mgr->mutex, portMAX_DELAY);
 
@@ -620,19 +706,28 @@ static void run_control_loop(control_manager_handle_t mgr) {
       // Cascaded control: tension PI outputs speed setpoint
       speed_setpoint =
           pi_compute(&mgr->tension_pi, mgr->tension_setpoint, tension_kg);
-      pwm_output = pi_compute(&mgr->speed_pi, speed_setpoint, speed_rpm);
+      new_pwm_output = pi_compute(&mgr->speed_pi, speed_setpoint, speed_rpm);
+
+      static int log_cnt = 0;
+      if (log_cnt++ % 50 == 0) {
+        ESP_LOGI(
+            TAG,
+            "PI RUN: SP=%.2f Act=%.2f | SpdSP=%.2f SpdAct=%.2f -> PWM=%.2f",
+            mgr->tension_setpoint, tension_kg, speed_setpoint, speed_rpm,
+            new_pwm_output);
+      }
       break;
 
     case MODE_MANUAL:
       // Direct speed control
       speed_setpoint = mgr->speed_setpoint;
-      pwm_output = pi_compute(&mgr->speed_pi, speed_setpoint, speed_rpm);
+      new_pwm_output = pi_compute(&mgr->speed_pi, speed_setpoint, speed_rpm);
       break;
 
     case MODE_TUNING_SPEED:
       // Speed loop auto-tune: relay output goes directly to PWM
       if (autotune_is_active(mgr->autotuner)) {
-        pwm_output = autotune_update(mgr->autotuner, 600.0f, speed_rpm);
+        new_pwm_output = autotune_update(mgr->autotuner, 600.0f, speed_rpm);
       }
       break;
 
@@ -642,13 +737,14 @@ static void run_control_loop(control_manager_handle_t mgr) {
       if (autotune_is_active(mgr->autotuner)) {
         speed_setpoint =
             autotune_update(mgr->autotuner, mgr->tension_setpoint, tension_kg);
-        pwm_output = pi_compute(&mgr->speed_pi, speed_setpoint, speed_rpm);
+        new_pwm_output = pi_compute(&mgr->speed_pi, speed_setpoint, speed_rpm);
       }
       break;
 
     default:
       break;
     }
+    update_motor = true;
 
     // Check auto-tune completion (for both tuning modes)
     if ((mgr->mode == MODE_TUNING_SPEED || mgr->mode == MODE_TUNING_TENSION) &&
@@ -697,15 +793,17 @@ static void run_control_loop(control_manager_handle_t mgr) {
   } else if (state == SYSTEM_STATE_FAULT ||
              state == SYSTEM_STATE_EMERGENCY_STOP) {
     // Fault condition - stop immediately
-    pwm_output = 0.0f;
+    new_pwm_output = 0.0f;
+    update_motor = true;
     pi_set_enabled(&mgr->speed_pi, false);
     pi_set_enabled(&mgr->tension_pi, false);
   }
 
-  // Update status
+  // Update status (always read true PWM from motor)
   mgr->status.tension_kg = tension_kg;
   mgr->status.speed_rpm = speed_rpm;
-  mgr->status.pwm_percent = pwm_output;
+  mgr->status.pwm_percent =
+      update_motor ? new_pwm_output : motor_get_speed(mgr->motor);
   mgr->status.tension_setpoint = mgr->tension_setpoint;
   mgr->status.speed_setpoint = speed_setpoint;
   mgr->status.tension_error = mgr->tension_setpoint - tension_kg;
@@ -723,10 +821,11 @@ static void run_control_loop(control_manager_handle_t mgr) {
   xSemaphoreGive(mgr->mutex);
 
   // === Apply Motor Output ===
-  if (state != SYSTEM_STATE_FAULT && state != SYSTEM_STATE_EMERGENCY_STOP) {
-    motor_set_speed(mgr->motor, pwm_output);
-    motor_update(mgr->motor);
+  if (update_motor) {
+    motor_set_speed(mgr->motor, new_pwm_output);
   }
+  // Always update motor state machine (for ramping/soft-start)
+  motor_update(mgr->motor);
 
   // === Log Data ===
   log_sample_t sample = {
@@ -735,7 +834,7 @@ static void run_control_loop(control_manager_handle_t mgr) {
       .tension_actual = tension_kg,
       .speed_setpoint = speed_setpoint,
       .speed_actual = speed_rpm,
-      .pwm_output = pwm_output,
+      .pwm_output = update_motor ? new_pwm_output : motor_get_speed(mgr->motor),
       .tension_error = mgr->tension_setpoint - tension_kg,
       .speed_error = speed_setpoint - speed_rpm,
       .state = state,
@@ -765,10 +864,20 @@ static void ui_task(void *arg) {
         .tension_setpoint = status.tension_setpoint,
         .tension_actual = status.tension_kg,
         .speed_actual = status.speed_rpm,
+        .speed_setpoint = status.speed_setpoint,
         .pwm_percent = status.pwm_percent,
         .system_state = status.system_state,
         .fault_flags = status.fault_flags,
         .calibrated = status.calibrated,
+        .tuned = status.tuned,
+        .uptime_seconds = status.uptime_seconds,
+        .speed_kp = mgr->speed_pi.kp,
+        .speed_ki = mgr->speed_pi.ki,
+        .tension_kp = mgr->tension_pi.kp,
+        .tension_ki = mgr->tension_pi.ki,
+        .encoder_ppr = encoder_get_ppr(mgr->encoder),
+        .max_rpm = CONFIG_MOTOR_MAX_RPM,
+        .tension_step = mgr->tension_step,
     };
     lcd_update(mgr->lcd, &lcd_data);
 
@@ -834,13 +943,89 @@ static void on_lcd_command(uint8_t command, float value, void *user_data) {
     break;
 
   case '+':
-    control_manager_set_tension(mgr, mgr->tension_setpoint + 0.5f);
+    control_manager_set_tension(mgr, mgr->tension_setpoint + mgr->tension_step);
     break;
 
   case '-':
-    control_manager_set_tension(mgr, mgr->tension_setpoint - 0.5f);
+    control_manager_set_tension(mgr, mgr->tension_setpoint - mgr->tension_step);
     break;
 
+  default:
+    break;
+  }
+}
+
+/**
+ * @brief Handle structured commands from LCD menu system
+ */
+static void on_menu_command(lcd_command_id_t cmd, float value,
+                            void *user_data) {
+  control_manager_handle_t mgr = (control_manager_handle_t)user_data;
+
+  switch (cmd) {
+  case LCD_CMD_TENSION_UP:
+    control_manager_set_tension(mgr, mgr->tension_setpoint + value);
+    break;
+  case LCD_CMD_TENSION_DOWN:
+    control_manager_set_tension(mgr, mgr->tension_setpoint - value);
+    break;
+  case LCD_CMD_JOG_LEFT:
+    control_manager_jog(mgr, -30.0f); /* 30% speed left */
+    break;
+  case LCD_CMD_JOG_RIGHT:
+    control_manager_jog(mgr, 30.0f); /* 30% speed right */
+    break;
+  case LCD_CMD_JOG_STOP:
+    control_manager_jog(mgr, 0.0f);
+    break;
+  case LCD_CMD_TARE:
+    control_manager_start_tare(mgr);
+    break;
+  case LCD_CMD_CALIBRATE:
+    control_manager_start_calibration(mgr, value);
+    break;
+  case LCD_CMD_AUTOTUNE_SPEED:
+    control_manager_start_autotune(mgr, true);
+    break;
+  case LCD_CMD_AUTOTUNE_TENSION:
+    control_manager_start_autotune(mgr, false);
+    break;
+  case LCD_CMD_CLEAR_FAULTS:
+    control_manager_reset_faults(mgr);
+    break;
+  case LCD_CMD_SET_TENSION_STEP:
+    mgr->tension_step = value;
+    ESP_LOGI(TAG, "Tension step set to %.1f kg", value);
+    break;
+  case LCD_CMD_SET_PPR: {
+    uint16_t ppr = (uint16_t)value;
+    encoder_set_ppr(mgr->encoder, ppr);
+    /* Save to NVS */
+    nvs_handle_t nvs;
+    if (nvs_open("config", NVS_READWRITE, &nvs) == ESP_OK) {
+      nvs_set_u16(nvs, "ppr", ppr);
+      nvs_commit(nvs);
+      nvs_close(nvs);
+    }
+    ESP_LOGI(TAG, "PPR set to %u", ppr);
+    break;
+  }
+  case LCD_CMD_SET_SPEED_KP:
+    pi_set_gains(&mgr->speed_pi, value, mgr->speed_pi.ki);
+    ESP_LOGI(TAG, "Speed Kp set to %.4f", value);
+    break;
+  case LCD_CMD_SET_SPEED_KI:
+    pi_set_gains(&mgr->speed_pi, mgr->speed_pi.kp, value);
+    ESP_LOGI(TAG, "Speed Ki set to %.4f", value);
+    break;
+  case LCD_CMD_SET_TENSION_KP:
+    pi_set_gains(&mgr->tension_pi, value, mgr->tension_pi.ki);
+    ESP_LOGI(TAG, "Tension Kp set to %.4f", value);
+    break;
+  case LCD_CMD_SET_TENSION_KI:
+    pi_set_gains(&mgr->tension_pi, mgr->tension_pi.kp, value);
+    ESP_LOGI(TAG, "Tension Ki set to %.4f", value);
+    break;
   default:
     break;
   }

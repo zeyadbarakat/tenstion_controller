@@ -10,12 +10,12 @@ A production-ready cascaded PI tension control system for unwinding applications
 ## Features
 
 - **Cascaded PI Control** — Outer tension loop, inner speed loop for smooth unwinding
-- **Relay Feedback Auto-Tuning** — Åström-Hägglund method with No-Overshoot tuning rule (safe for material handling)
-- **Real-Time WebSocket Dashboard** — 50Hz Chart.js graphs via WebSocket push, HTTP polling fallback
+- **Relay Feedback Auto-Tuning** — Åström-Hägglund method with No-Overshoot tuning rule
+- **20x4 I2C LCD & 1x4 Keypad** — Full physical interface for standalone operation
+- **Real-Time WebSocket Dashboard** — 50Hz Chart.js graphs via WebSocket push
 - **PCNT Quadrature Encoder** — Hardware 4x decoding, 600 PPR supported
 - **HX711 Load Cell** — 24-bit ADC with NVS calibration storage
 - **Safety Monitoring** — E-STOP, fault detection, state machine with hardware TWDT watchdog
-- **UART Terminal** — Menu-driven LCD interface via serial
 - **Persistent Tuning** — PI gains saved to NVS (x10000 precision), restored on boot automatically
 
 ---
@@ -25,9 +25,9 @@ A production-ready cascaded PI tension control system for unwinding applications
 The user sets a **tension setpoint** (e.g., 5.0 kg). The system automatically adjusts motor speed to maintain constant tension as the roll unwinds:
 
 ```
-Full Roll → Slow RPM → Tension = 5.0 kg ✅
-Half Roll → Medium RPM → Tension = 5.0 kg ✅
-Empty Roll → Fast RPM → Tension = 5.0 kg ✅
+Full Roll  → Slow RPM   → Tension = 5.0 kg ✅
+Half Roll  → Medium RPM → Tension = 5.0 kg ✅
+Empty Roll → Fast RPM   → Tension = 5.0 kg ✅
 ```
 
 The cascaded PI controller continuously adjusts the PWM output — no jerky start/stop behavior.
@@ -42,6 +42,8 @@ The cascaded PI controller continuously adjusts the PWM output — no jerky star
 | Motor | DC 80V 600W 2000RPM |
 | Encoder | 600 PPR Quadrature |
 | Load Cell | 10-50kg with HX711 |
+| LCD | 20x4 Character LCD + PCF8574 I2C |
+| Keypad | 1x4 Membrane (or 4 generic buttons) |
 | Motor Driver | H-Bridge (BTS7960 or similar) |
 | Buttons | RUN, STOP, E-STOP (NC) |
 
@@ -53,38 +55,54 @@ The cascaded PI controller continuously adjusts the PWM output — no jerky star
                            ESP32-S3
                         ┌─────────────┐
                         │             │
-   Encoder A ───────────┤ GPIO4       │
-   Encoder B ───────────┤ GPIO5       │
+    Encoder A ──────────┤ GPIO4       │
+    Encoder B ──────────┤ GPIO5       │
                         │             │
-   HX711 DATA ──────────┤ GPIO6       │
-   HX711 CLK ───────────┤ GPIO7       │
+    KEY1 (UP) ──────────┤ GPIO1       │
+    KEY2 (OK) ──────────┤ GPIO2       │
+    KEY3 (LEFT) ────────┤ GPIO6       │
+    KEY4 (RIGHT) ───────┤ GPIO7       │
                         │             │
-   Motor PWM ───────────┤ GPIO15      ├───── H-Bridge IN1
-   Motor DIR ───────────┤ GPIO16      ├───── H-Bridge IN2
+    LCD SDA ────────────┤ GPIO8       │
+    LCD SCL ────────────┤ GPIO9       │
                         │             │
-   RUN Button ──┬───────┤ GPIO10      │      (NC to GND)
-                │       │             │
-   STOP Button ─┬───────┤ GPIO11      │      (NC to GND)
-                │       │             │
-   E-STOP ──────┬───────┤ GPIO12      │      (NC to GND)
-                │       │             │
-              10kΩ      │             │
-              Pullup    └─────────────┘
+    HX711 DATA ─────────┤ GPIO13      │
+    HX711 CLK ──────────┤ GPIO14      │
+                        │             │
+    Motor PWM ──────────┤ GPIO15      ├───── H-Bridge IN1
+    Motor DIR ──────────┤ GPIO16      ├───── H-Bridge IN2
+                        │             │
+    RUN Button ──┬──────┤ GPIO10      │      (NC to GND)
+                 │      │             │
+    STOP Button ─┬──────┤ GPIO11      │      (NC to GND)
+                 │      │             │
+    E-STOP ──────┬──────┤ GPIO12      │      (NC to GND)
+                 │      │             │
+               10kΩ     │             │
+               Pullup   └─────────────┘
 ```
 
 ### Pin Assignment Table
 
 | Function | GPIO | Notes |
 |----------|------|-------|
-| Encoder A | 4 | PCNT capable |
-| Encoder B | 5 | PCNT capable |
-| HX711 Data | 6 | General purpose |
-| HX711 Clock | 7 | General purpose |
-| Motor PWM | 15 | LEDC, 25kHz |
-| Motor Direction | 16 | HIGH/LOW |
-| RUN Button | 10 | Internal pull-up |
-| STOP Button | 11 | Internal pull-up |
-| E-STOP | 12 | NC contacts, highest priority |
+| KEY1 (▲) | 1 | Tension up / Menu enter |
+| KEY2 (OK)| 2 | Confirm / Menu OK |
+| Encoder A| 4 | PCNT quadrature A |
+| Encoder B| 5 | PCNT quadrature B |
+| KEY3 (◄) | 6 | Jog left / Navigate up |
+| KEY4 (►) | 7 | Jog right / Navigate down |
+| LCD SDA  | 8 | I2C Data (0x27) |
+| LCD SCL  | 9 | I2C Clock |
+| RUN Button| 10 | Standalone Start |
+| STOP Button| 11 | Standalone Stop |
+| E-STOP   | 12 | Hardware Emergency Stop (NC) |
+| HX711 Data| 13 | Load cell Data |
+| HX711 CLK | 14 | Load cell Clock |
+| Motor PWM | 15 | 25kHz PWM Output |
+| Motor DIR | 16 | Direction Signal |
+| LED Run   | 17 | Green status LED |
+| LED Fault | 18 | Red fault LED |
 
 > **⚠️ Safety Note**: The E-STOP should also have an independent relay to cut motor power directly, regardless of software state.
 
@@ -160,6 +178,21 @@ The user only sets **tension**. The tension PI controller automatically calculat
 
 ## Usage
 
+### Physical Interface (LCD + Keypad)
+
+The 20x4 LCD provides a standalone interface for the tension controller:
+
+- **Main Screen**: Displays Tension (Actual/Setpoint), Speed (Actual/PWM%), and System State.
+- **Navigation**:
+  - **Single Press ▲/▼**: Adjust tension setpoint.
+  - **Hold ▲**: Enter Settings Menu.
+  - **Hold ◄/►**: Jog motor (only in IDLE).
+- **Menu System**:
+  - **Calibration**: Tare and Span calibrate the load cell.
+  - **Auto-Tune**: Trigger speed/tension auto-tuning.
+  - **Config**: Edit Encoder PPR, Motor direction, etc.
+  - **Status**: View active faults and system info.
+
 ### Web Interface
 
 1. Connect to WiFi:
@@ -187,8 +220,6 @@ Connect to USB serial at 115200 baud:
 | `T` | Start speed loop auto-tune |
 | `C` | Tare load cell (zero calibration) |
 | `C5.0` | Span calibration with 5kg weight |
-| `+` | Increase tension setpoint by 0.5kg |
-| `-` | Decrease tension setpoint by 0.5kg |
 
 ---
 
@@ -254,6 +285,12 @@ The web dashboard uses WebSocket for smooth 50Hz chart updates:
 
 ## Troubleshooting
 
+### PWM showing 0.0% unexpectedly
+- **Fixed in v1.2.0**. Ensure you are in the `RUNNING` or `JOGGING` state. If the speed is below the deadband threshold (<15% PWM by default in safety checks), the system may prevent startup if no encoder movement is detected.
+
+### Automatic Stop / Encoder Fail
+- The system expects encoder feedback if `PWM > 15.0%`. If the motor doesn't spin at this level, check your motor power supply or deadband settings. You can increase the threshold in `safety_monitor/safety.c`.
+
 ### Motor not spinning
 1. Check H-bridge power supply
 2. Verify PWM/DIR GPIO connections
@@ -267,13 +304,6 @@ The web dashboard uses WebSocket for smooth 50Hz chart updates:
 ### WebSocket disconnecting
 1. Check WiFi signal strength
 2. Verify mDNS is working: `ping tension-ctrl.local`
-3. Use IP address directly if mDNS fails
-
-### Auto-tune fails
-1. Ensure motor is free to move
-2. Check encoder is producing pulses
-3. Verify load cell is reading properly
-4. Try increasing timeout in menuconfig
 
 ---
 
@@ -298,7 +328,7 @@ tension_controller/
     ├── safety_monitor/     # State machine, fault handling
     ├── data_logger/        # Circular buffer, metrics
     ├── button_handler/     # Debouncing, E-STOP
-    ├── lcd_interface/      # UART terminal UI
+    ├── lcd_interface/      # Physical LCD & Keypad driver
     ├── web_interface/      # WiFi, HTTP server, WebSocket, Chart.js dashboard
     └── control_manager/    # Central orchestrator, cascaded control
 ```
@@ -313,28 +343,32 @@ MIT License - See LICENSE file for details.
 
 ## Changelog
 
+### v1.2.0 — Physical UI & Stability (MAR 2026)
+
+**New Hardware Support:**
+- Added support for 20x4 I2C LCD and 1x4 Keypad for standalone operation.
+- Added "Jog" functionality via keypad long-press.
+
+**Critical Bug Fixes:**
+- Fixed **PWM display bug** where Web UI would report 0.0% PWM during operation.
+- Fixed **Autotune bug** where Autotune would start but never transition the motor state from IDLE.
+- Fixed **Encoder reliability**: Increased failure threshold from 5.0% to 15.0% to allow for motor starting inertia.
+
 ### v1.1.0 — Bug Fixes & Robustness (Feb 2026)
 
 **Critical Bug Fixes:**
-- Fixed `SYSTEM_STATE_STARTING` never transitioning to `RUNNING` — motor now actually runs after pressing RUN
-- Fixed WebSocket clients not receiving broadcasts (registered during handshake instead of first message)
-- Fixed WS2812 LED startup blink using wrong API (`gpio_set_level` → `led_set_color`)
-- Fixed encoder PPR always using hardcoded 600 instead of NVS/Kconfig value
-- Fixed WiFi AP ignoring Kconfig SSID/password macros
+- Fixed `SYSTEM_STATE_STARTING` never transitioning to `RUNNING`.
+- Fixed WebSocket clients and UART NVS precision.
 
 **Robustness Improvements:**
-- Added ESP32 hardware Task Watchdog Timer (TWDT) for control task
-- Added load cell calibration check before tension loop auto-tune
-- Increased PI gain NVS precision from x100 to x10000 (gains < 0.01 no longer lost)
-- Deferred NVS writes outside control loop mutex to prevent motor glitches
-
-> ⚠️ **NVS Migration**: PI gain format changed. Run `idf.py erase-flash` or re-run auto-tune after updating.
+- Added ESP32 hardware Task Watchdog Timer (TWDT) for control task.
+- Added load cell calibration check before tension loop auto-tune.
 
 ### v1.0.0 — Initial Release
 
-- Cascaded PI control with auto-tuning
-- WebSocket real-time dashboard
-- Full safety monitoring
+- Cascaded PI control with auto-tuning.
+- WebSocket real-time dashboard.
+- Full safety monitoring.
 
 ## Author
 

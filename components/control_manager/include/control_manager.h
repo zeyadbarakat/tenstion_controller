@@ -229,6 +229,30 @@ void control_manager_start_autotune(control_manager_handle_t handle,
 void control_manager_jog(control_manager_handle_t handle, float speed_percent);
 
 /**
+ * @brief Set HX711 EMA filter alpha at runtime
+ */
+void control_manager_set_ema_alpha(control_manager_handle_t handle,
+                                   float alpha);
+
+/**
+ * @brief Set HX711 moving average filter window at runtime
+ */
+void control_manager_set_filter_size(control_manager_handle_t handle,
+                                     uint8_t size);
+
+/**
+ * @brief Set HX711 calibration offset at runtime
+ */
+void control_manager_set_cal_offset(control_manager_handle_t handle,
+                                    int32_t offset);
+
+/**
+ * @brief Set HX711 calibration scale at runtime
+ */
+void control_manager_set_cal_scale(control_manager_handle_t handle,
+                                   float scale);
+
+/**
  * @brief Get default configuration
  *
  * @return Default configuration

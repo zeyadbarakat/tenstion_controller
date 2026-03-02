@@ -183,6 +183,23 @@ uint32_t encoder_get_idle_time_ms(encoder_handle_t handle);
  */
 encoder_config_t encoder_get_default_config(void);
 
+/**
+ * @brief Get current pulses per revolution setting
+ *
+ * @param[in] handle    Encoder handle
+ *
+ * @return Current PPR value
+ */
+uint32_t encoder_get_ppr(encoder_handle_t handle);
+
+/**
+ * @brief Set pulses per revolution (updates CPR accordingly)
+ *
+ * @param[in] handle    Encoder handle
+ * @param[in] ppr       New PPR value
+ */
+void encoder_set_ppr(encoder_handle_t handle, uint32_t ppr);
+
 #ifdef __cplusplus
 }
 #endif
