@@ -212,6 +212,7 @@ static esp_err_t api_status_handler(httpd_req_t *req) {
   cJSON_AddNumberToObject(root, "speed", status.speed_rpm);
   cJSON_AddNumberToObject(root, "pwm", status.pwm_percent);
   cJSON_AddNumberToObject(root, "state", status.system_state);
+  cJSON_AddNumberToObject(root, "mode", status.mode);
   cJSON_AddNumberToObject(root, "faults", status.fault_flags);
   cJSON_AddBoolToObject(root, "calibrated", status.calibrated);
   cJSON_AddNumberToObject(root, "uptime", status.uptime_seconds);
@@ -227,6 +228,8 @@ static esp_err_t api_status_handler(httpd_req_t *req) {
 
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_set_hdr(req, "Cache-Control",
+                     "no-store, no-cache, must-revalidate, max-age=0");
   httpd_resp_send(req, json, strlen(json));
   free(json);
 
@@ -276,6 +279,13 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
   nvs_handle_t nvs;
   esp_err_t err = nvs_open("config", NVS_READONLY, &nvs);
 
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "api_config_get_handler: nvs_open failed with %s",
+             esp_err_to_name(err));
+  } else {
+    ESP_LOGI(TAG, "api_config_get_handler: nvs_open SUCCESS");
+  }
+
   cJSON *root = cJSON_CreateObject();
 
   if (err == ESP_OK) {
@@ -286,6 +296,7 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
     int32_t speed_ki_x = 1000;
     int32_t tension_kp_x = 2000;
     int32_t tension_ki_x = 500;
+    uint16_t autotune_speed = 150;
 
     nvs_get_u16(nvs, "ppr", &ppr);
     nvs_get_i32(nvs, "cal_offset", &cal_offset);
@@ -294,6 +305,10 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
     nvs_get_i32(nvs, "speed_ki", &speed_ki_x);
     nvs_get_i32(nvs, "tension_kp", &tension_kp_x);
     nvs_get_i32(nvs, "tension_ki", &tension_ki_x);
+    nvs_get_u16(nvs, "autotune_speed", &autotune_speed);
+
+    ESP_LOGI(TAG, "api_config_get_handler: speed_kp is %ld, speed_ki is %ld",
+             speed_kp_x, speed_ki_x);
 
     int32_t ema_alpha_x100 = 10; // default 0.10
     nvs_get_i32(nvs, "ema_alpha", &ema_alpha_x100);
@@ -311,6 +326,7 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "speed_ki", (float)speed_ki_x / 10000.0f);
     cJSON_AddNumberToObject(root, "tension_kp", (float)tension_kp_x / 10000.0f);
     cJSON_AddNumberToObject(root, "tension_ki", (float)tension_ki_x / 10000.0f);
+    cJSON_AddNumberToObject(root, "autotune_speed", autotune_speed);
     cJSON_AddNumberToObject(root, "ema_alpha", (float)ema_alpha_x100 / 100.0f);
     cJSON_AddNumberToObject(root, "ma_window", ma_window);
     cJSON_AddBoolToObject(root, "loaded", true);
@@ -323,6 +339,7 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "speed_ki", 0.1);
     cJSON_AddNumberToObject(root, "tension_kp", 2.0);
     cJSON_AddNumberToObject(root, "tension_ki", 0.05);
+    cJSON_AddNumberToObject(root, "autotune_speed", 150);
     cJSON_AddNumberToObject(root, "ema_alpha", 0.10);
     cJSON_AddNumberToObject(root, "ma_window", 20);
     cJSON_AddBoolToObject(root, "loaded", false);
@@ -333,6 +350,8 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
 
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_set_hdr(req, "Cache-Control",
+                     "no-store, no-cache, must-revalidate, max-age=0");
   httpd_resp_send(req, json, strlen(json));
   free(json);
   return ESP_OK;
@@ -368,6 +387,10 @@ static esp_err_t api_config_post_handler(httpd_req_t *req) {
   if ((item = cJSON_GetObjectItem(root, "ppr")) != NULL) {
     nvs_set_u16(nvs, "ppr", (uint16_t)item->valueint);
     ESP_LOGI(TAG, "Saved PPR: %d", item->valueint);
+  }
+  if ((item = cJSON_GetObjectItem(root, "autotune_speed")) != NULL) {
+    nvs_set_u16(nvs, "autotune_speed", (uint16_t)item->valueint);
+    ESP_LOGI(TAG, "Saved autotune_speed: %d", item->valueint);
   }
   // NOTE: cal_offset is NOT handled here - it is managed exclusively
   // by the Tare button (cmd 5) to prevent accidental overwrites.

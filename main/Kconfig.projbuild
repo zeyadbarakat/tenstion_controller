@@ -25,17 +25,29 @@ menu "Tension Controller Configuration"
             help
                 GPIO pin for HX711 clock line (SCK)
 
-        config MOTOR_GPIO_PWM
-            int "Motor PWM GPIO"
+        config MOTOR_GPIO_RPWM
+            int "Motor RPWM GPIO (Forward)"
             default 15
             help
-                GPIO pin for motor PWM output (LEDC capable)
+                GPIO pin for motor Forward PWM output (IBT-2 RPWM)
 
-        config MOTOR_GPIO_DIR
-            int "Motor Direction GPIO"
+        config MOTOR_GPIO_LPWM
+            int "Motor LPWM GPIO (Reverse)"
             default 16
             help
-                GPIO pin for motor direction control
+                GPIO pin for motor Reverse PWM output (IBT-2 LPWM)
+
+        config MOTOR_GPIO_R_EN
+            int "Motor R_EN GPIO (Forward Enable)"
+            default 17
+            help
+                GPIO pin to enable the forward half-bridge (IBT-2 R_EN)
+
+        config MOTOR_GPIO_L_EN
+            int "Motor L_EN GPIO (Reverse Enable)"
+            default 18
+            help
+                GPIO pin to enable the reverse half-bridge (IBT-2 L_EN)
 
         config LCD_GPIO_SDA
             int "LCD I2C SDA GPIO"
@@ -69,13 +81,13 @@ menu "Tension Controller Configuration"
 
         config LED_GPIO_RUNNING
             int "Running LED GPIO"
-            default 17
+            default 41
             help
                 GPIO pin for green running indicator LED
 
         config LED_GPIO_FAULT
             int "Fault LED GPIO"
-            default 18
+            default 42
             help
                 GPIO pin for red fault indicator LED
 

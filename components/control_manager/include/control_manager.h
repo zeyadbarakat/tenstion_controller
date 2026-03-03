@@ -73,8 +73,10 @@ typedef struct {
   int encoder_b_gpio;
   int hx711_data_gpio;
   int hx711_clock_gpio;
-  int motor_pwm_gpio;
-  int motor_dir_gpio;
+  int motor_rpwm_gpio;
+  int motor_lpwm_gpio;
+  int motor_r_en_gpio;
+  int motor_l_en_gpio;
   int button_run_gpio;
   int button_stop_gpio;
   int button_estop_gpio;

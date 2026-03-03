@@ -457,7 +457,7 @@
                 <div class="sp-label">Tension Setpoint (tap to edit)</div>
                 <div>
                     <span class="sp-val" id="sp-val" style="cursor: pointer;">5.0</span>
-                    <input type="number" id="sp-input" class="sp-input" step="0.1" min="0" max="50"
+                    <input type="number" id="sp-input" class="sp-input" step="0.1" min="0" max="200"
                         style="display:none; width:80px; font-size:1.5rem; text-align:center; background:#1e293b; color:#f59e0b; border:2px solid #f59e0b; border-radius:8px;">
                     <span class="sp-unit">kg</span>
                 </div>
@@ -550,6 +550,9 @@
             <div class="row"><span class="lbl">Encoder PPR:</span><input type="number" id="ppr" value="600"
                     style="width:80px;"><button class="btn-sm btn-gray" onclick="savePPR()"
                     style="margin-left:8px;">💾</button></div>
+            <div class="row"><span class="lbl">Tune RPM:</span><input type="number" id="autotune-speed" value="150"
+                    style="width:80px;"><button class="btn-sm btn-gray" onclick="saveAutotuneSpeed()"
+                    style="margin-left:8px;">💾</button></div>
             <div class="row"><span class="lbl">IP:</span><span>192.168.4.1</span></div>
             <div class="row"><button class="btn-sm btn-blue" onclick="cmd(9)">🔄 Reset Faults</button></div>
             <div style="font-size:0.7rem; color:#64748b; margin-top:10px;">
@@ -570,6 +573,7 @@
         let graphData = { actual: [], setpoint: [] };
         let currentSetpoint = 5.0;
         let currentState = 0;
+        let currentMode = 0;
 
         // Canvas setup
         const canvas = document.getElementById('graph');
@@ -653,6 +657,12 @@
             document.getElementById('pwm').textContent = d.pwm?.toFixed(1) ?? '--';
             document.getElementById('state').textContent = STATES[d.state] ?? 'Unknown';
             currentState = d.state || 0;
+            if (d.mode !== undefined) {
+                if ((currentMode === 3 || currentMode === 4) && d.mode === 0) {
+                    setTimeout(loadConfig, 1000); // Reload NVS config 1s after tuning finishes
+                }
+                currentMode = d.mode;
+            }
             currentSetpoint = d.tensionSP || currentSetpoint;
             document.getElementById('sp-val').textContent = currentSetpoint.toFixed(1);
 
@@ -813,30 +823,59 @@
                 else alert('Save failed');
             }).catch(() => alert('Error saving tuning'));
         }
+        function saveAutotuneSpeed() {
+            const spd = parseInt(document.getElementById('autotune-speed').value);
+            fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ autotune_speed: spd })
+            }).then(r => r.json()).then(d => {
+                if (d.saved) alert('Autotune speed saved to NVS!');
+                else alert('Save failed');
+            }).catch(() => alert('Error saving autotune speed'));
+        }
         function listLogs() {
             document.getElementById('log-list').innerHTML = 'No log files found. CSV logging not yet active.';
             // TODO: Fetch from /api/logs endpoint
         }
         function loadConfig() {
             fetch('/api/config').then(r => r.json()).then(cfg => {
-                if (cfg.ppr) document.getElementById('ppr').value = cfg.ppr;
-                if (cfg.cal_offset !== undefined) document.getElementById('cal-offset').value = cfg.cal_offset;
-                if (cfg.cal_scale !== undefined) document.getElementById('cal-scale').value = parseFloat(cfg.cal_scale).toFixed(6);
-                if (cfg.speed_kp !== undefined) document.getElementById('speed-kp').value = parseFloat(cfg.speed_kp).toFixed(2);
-                if (cfg.speed_ki !== undefined) document.getElementById('speed-ki').value = parseFloat(cfg.speed_ki).toFixed(2);
-                if (cfg.tension_kp !== undefined) document.getElementById('tension-kp').value = parseFloat(cfg.tension_kp).toFixed(2);
-                if (cfg.tension_ki !== undefined) document.getElementById('tension-ki').value = parseFloat(cfg.tension_ki).toFixed(2);
-                if (cfg.ema_alpha !== undefined) {
+                const elPpr = document.getElementById('ppr');
+                const elAutoSp = document.getElementById('autotune-speed');
+                const elCalO = document.getElementById('cal-offset');
+                const elCalS = document.getElementById('cal-scale');
+                const elSKp = document.getElementById('speed-kp');
+                const elSKi = document.getElementById('speed-ki');
+                const elTKp = document.getElementById('tension-kp');
+                const elTKi = document.getElementById('tension-ki');
+
+                if (cfg.ppr && elPpr) elPpr.value = cfg.ppr;
+                if (cfg.autotune_speed && elAutoSp) elAutoSp.value = cfg.autotune_speed;
+                if (cfg.cal_offset !== undefined && elCalO) elCalO.value = cfg.cal_offset;
+                if (cfg.cal_scale !== undefined && elCalS) elCalS.value = parseFloat(cfg.cal_scale).toFixed(6);
+                if (cfg.speed_kp !== undefined && elSKp) elSKp.value = parseFloat(cfg.speed_kp).toFixed(2);
+                if (cfg.speed_ki !== undefined && elSKi) elSKi.value = parseFloat(cfg.speed_ki).toFixed(2);
+                if (cfg.tension_kp !== undefined && elTKp) elTKp.value = parseFloat(cfg.tension_kp).toFixed(2);
+                if (cfg.tension_ki !== undefined && elTKi) elTKi.value = parseFloat(cfg.tension_ki).toFixed(2);
+
+                const elEmaS = document.getElementById('ema-slider');
+                const elEmaV = document.getElementById('ema-val');
+                if (cfg.ema_alpha !== undefined && elEmaS && elEmaV) {
                     const v = Math.round(cfg.ema_alpha * 100);
-                    document.getElementById('ema-slider').value = v;
-                    document.getElementById('ema-val').textContent = v;
+                    elEmaS.value = v;
+                    elEmaV.textContent = v;
                 }
-                if (cfg.ma_window !== undefined) {
-                    document.getElementById('ma-slider').value = cfg.ma_window;
-                    document.getElementById('ma-val').textContent = cfg.ma_window;
+
+                const elMaS = document.getElementById('ma-slider');
+                const elMaV = document.getElementById('ma-val');
+                if (cfg.ma_window !== undefined && elMaS && elMaV) {
+                    elMaS.value = cfg.ma_window;
+                    elMaV.textContent = cfg.ma_window;
                 }
                 console.log('Config loaded:', cfg);
-            }).catch(e => console.log('Config load error:', e));
+            }).catch(e => {
+                console.log('Config load error:', e);
+            });
         }
 
         // Setpoint adjustment
@@ -844,7 +883,7 @@
         let holdDelay = 300;
 
         function adjustSP(delta) {
-            currentSetpoint = Math.max(0, Math.min(50, currentSetpoint + delta));
+            currentSetpoint = Math.max(0, Math.min(200, currentSetpoint + delta));
             currentSetpoint = Math.round(currentSetpoint * 10) / 10; // Round to 1 decimal
             document.getElementById('sp-val').textContent = currentSetpoint.toFixed(1);
             cmd(3, currentSetpoint);

@@ -42,7 +42,6 @@
 #include <math.h>
 #include <string.h>
 
-
 static const char *TAG = "motor";
 
 /*******************************************************************************
@@ -51,7 +50,8 @@ static const char *TAG = "motor";
 
 #define LEDC_TIMER LEDC_TIMER_0
 #define LEDC_MODE LEDC_LOW_SPEED_MODE
-#define LEDC_CHANNEL LEDC_CHANNEL_0
+#define LEDC_CHANNEL_RPWM LEDC_CHANNEL_0
+#define LEDC_CHANNEL_LPWM LEDC_CHANNEL_1
 
 #define MAX_DUTY_10BIT 1023
 #define DEFAULT_RAMP_RATE 100.0f // % per second
@@ -63,8 +63,10 @@ static const char *TAG = "motor";
 
 struct motor_s {
   // Configuration
-  gpio_num_t gpio_pwm;
-  gpio_num_t gpio_dir;
+  gpio_num_t gpio_rpwm;
+  gpio_num_t gpio_lpwm;
+  gpio_num_t gpio_r_en;
+  gpio_num_t gpio_l_en;
   uint32_t max_duty;
   float ramp_rate;
   float deadband_percent;
@@ -102,8 +104,10 @@ static void apply_motor_output(motor_handle_t handle, uint32_t duty,
 
 motor_config_t motor_get_default_config(void) {
   motor_config_t config = {
-      .gpio_pwm = 15,
-      .gpio_dir = 16,
+      .gpio_rpwm = 15,
+      .gpio_lpwm = 16,
+      .gpio_r_en = 17,
+      .gpio_l_en = 18,
       .pwm_freq_hz = 25000,     // 25 kHz
       .pwm_resolution = 10,     // 10-bit (0-1023)
       .ramp_rate = 100.0f,      // 100% per second
@@ -117,9 +121,9 @@ esp_err_t motor_init(const motor_config_t *config, motor_handle_t *handle) {
     return ESP_ERR_INVALID_ARG;
   }
 
-  ESP_LOGI(TAG, "Initializing motor: PWM=%d, DIR=%d, Freq=%lu Hz",
-           config->gpio_pwm, config->gpio_dir,
-           (unsigned long)config->pwm_freq_hz);
+  ESP_LOGI(TAG, "Initializing motor: RPWM=%d, LPWM=%d, EN=%d/%d, Freq=%lu Hz",
+           config->gpio_rpwm, config->gpio_lpwm, config->gpio_r_en,
+           config->gpio_l_en, (unsigned long)config->pwm_freq_hz);
 
   // Allocate structure
   struct motor_s *motor = calloc(1, sizeof(struct motor_s));
@@ -129,8 +133,10 @@ esp_err_t motor_init(const motor_config_t *config, motor_handle_t *handle) {
   }
 
   // Store configuration
-  motor->gpio_pwm = config->gpio_pwm;
-  motor->gpio_dir = config->gpio_dir;
+  motor->gpio_rpwm = config->gpio_rpwm;
+  motor->gpio_lpwm = config->gpio_lpwm;
+  motor->gpio_r_en = config->gpio_r_en;
+  motor->gpio_l_en = config->gpio_l_en;
   motor->max_duty = (1 << config->pwm_resolution) - 1;
   motor->ramp_rate =
       config->ramp_rate > 0 ? config->ramp_rate : DEFAULT_RAMP_RATE;
@@ -162,35 +168,52 @@ esp_err_t motor_init(const motor_config_t *config, motor_handle_t *handle) {
     return ret;
   }
 
-  // Configure LEDC channel
-  ledc_channel_config_t channel_conf = {
+  // Configure LEDC channels for RPWM and LPWM
+  ledc_channel_config_t r_channel_conf = {
       .speed_mode = LEDC_MODE,
-      .channel = LEDC_CHANNEL,
+      .channel = LEDC_CHANNEL_RPWM,
       .timer_sel = LEDC_TIMER,
       .intr_type = LEDC_INTR_DISABLE,
-      .gpio_num = config->gpio_pwm,
+      .gpio_num = config->gpio_rpwm,
       .duty = 0,
       .hpoint = 0,
   };
-
-  ret = ledc_channel_config(&channel_conf);
+  ret = ledc_channel_config(&r_channel_conf);
   if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to configure LEDC channel: %s", esp_err_to_name(ret));
+    ESP_LOGE(TAG, "Failed to configure RPWM channel: %s", esp_err_to_name(ret));
     vSemaphoreDelete(motor->mutex);
     free(motor);
     return ret;
   }
 
-  // Configure direction GPIO
+  ledc_channel_config_t l_channel_conf = {
+      .speed_mode = LEDC_MODE,
+      .channel = LEDC_CHANNEL_LPWM,
+      .timer_sel = LEDC_TIMER,
+      .intr_type = LEDC_INTR_DISABLE,
+      .gpio_num = config->gpio_lpwm,
+      .duty = 0,
+      .hpoint = 0,
+  };
+  ret = ledc_channel_config(&l_channel_conf);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to configure LPWM channel: %s", esp_err_to_name(ret));
+    vSemaphoreDelete(motor->mutex);
+    free(motor);
+    return ret;
+  }
+
+  // Configure Enable GPIOs
   gpio_config_t io_conf = {
       .intr_type = GPIO_INTR_DISABLE,
       .mode = GPIO_MODE_OUTPUT,
-      .pin_bit_mask = (1ULL << config->gpio_dir),
+      .pin_bit_mask = (1ULL << config->gpio_r_en) | (1ULL << config->gpio_l_en),
       .pull_down_en = GPIO_PULLDOWN_DISABLE,
       .pull_up_en = GPIO_PULLUP_DISABLE,
   };
   gpio_config(&io_conf);
-  gpio_set_level(config->gpio_dir, 0); // Default forward
+  gpio_set_level(config->gpio_r_en, 0); // Default disabled
+  gpio_set_level(config->gpio_l_en, 0); // Default disabled
 
   motor->enabled = true;
   motor->direction = MOTOR_DIR_STOPPED;
@@ -211,7 +234,8 @@ esp_err_t motor_deinit(motor_handle_t handle) {
   motor_emergency_stop(handle);
 
   // Stop LEDC
-  ledc_stop(LEDC_MODE, LEDC_CHANNEL, 0);
+  ledc_stop(LEDC_MODE, LEDC_CHANNEL_RPWM, 0);
+  ledc_stop(LEDC_MODE, LEDC_CHANNEL_LPWM, 0);
 
   vSemaphoreDelete(handle->mutex);
   free(handle);
@@ -360,9 +384,13 @@ esp_err_t motor_brake(motor_handle_t handle) {
 
   xSemaphoreTake(handle->mutex, portMAX_DELAY);
 
-  // Set PWM to 0
-  ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, 0);
-  ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
+  // Set PWM to 0 and EN to HIGH for active braking
+  ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_RPWM, 0);
+  ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_RPWM);
+  ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_LPWM, 0);
+  ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_LPWM);
+  gpio_set_level(handle->gpio_r_en, 1);
+  gpio_set_level(handle->gpio_l_en, 1);
 
   handle->current_duty = 0;
   handle->current_speed = 0;
@@ -385,9 +413,13 @@ esp_err_t motor_coast(motor_handle_t handle) {
 
   xSemaphoreTake(handle->mutex, portMAX_DELAY);
 
-  // Set PWM to 0
-  ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, 0);
-  ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
+  // Coast by disabling half-bridges (L_EN and R_EN low)
+  ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_RPWM, 0);
+  ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_RPWM);
+  ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_LPWM, 0);
+  ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_LPWM);
+  gpio_set_level(handle->gpio_r_en, 0);
+  gpio_set_level(handle->gpio_l_en, 0);
 
   handle->current_duty = 0;
   handle->current_speed = 0;
@@ -441,9 +473,13 @@ esp_err_t motor_emergency_stop(motor_handle_t handle) {
 
   ESP_LOGW(TAG, "EMERGENCY STOP");
 
-  // Bypass mutex for emergency - direct hardware access
-  ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, 0);
-  ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
+  // Bypass mutex for emergency - direct hardware access (Coast)
+  ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_RPWM, 0);
+  ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_RPWM);
+  ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_LPWM, 0);
+  ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_LPWM);
+  gpio_set_level(handle->gpio_r_en, 0);
+  gpio_set_level(handle->gpio_l_en, 0);
 
   xSemaphoreTake(handle->mutex, portMAX_DELAY);
 
@@ -516,9 +552,13 @@ esp_err_t motor_enable(motor_handle_t handle, bool enable) {
   xSemaphoreTake(handle->mutex, portMAX_DELAY);
 
   if (!enable && handle->enabled) {
-    // Disabling - stop motor first
-    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, 0);
-    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
+    // Disabling - stop motor first (Coast)
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_RPWM, 0);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_RPWM);
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_LPWM, 0);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_LPWM);
+    gpio_set_level(handle->gpio_r_en, 0);
+    gpio_set_level(handle->gpio_l_en, 0);
     handle->current_duty = 0;
     handle->current_speed = 0;
     handle->direction = MOTOR_DIR_STOPPED;
@@ -617,10 +657,30 @@ static float duty_to_speed(motor_handle_t handle, uint32_t duty) {
  */
 static void apply_motor_output(motor_handle_t handle, uint32_t duty,
                                bool forward) {
-  // Set direction
-  gpio_set_level(handle->gpio_dir, forward ? 0 : 1);
+  if (duty == 0) {
+    // Coast
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_RPWM, 0);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_RPWM);
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_LPWM, 0);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_LPWM);
+    gpio_set_level(handle->gpio_r_en, 0);
+    gpio_set_level(handle->gpio_l_en, 0);
+    return;
+  }
 
-  // Set PWM duty
-  ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, duty);
-  ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
+  // Enable both half-bridges
+  gpio_set_level(handle->gpio_r_en, 1);
+  gpio_set_level(handle->gpio_l_en, 1);
+
+  if (forward) {
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_LPWM, 0);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_LPWM);
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_RPWM, duty);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_RPWM);
+  } else {
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_RPWM, 0);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_RPWM);
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_LPWM, duty);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_LPWM);
+  }
 }

@@ -117,8 +117,10 @@ control_manager_config_t control_manager_get_default_config(void) {
       .encoder_b_gpio = 5,
       .hx711_data_gpio = CONFIG_HX711_GPIO_DATA,
       .hx711_clock_gpio = CONFIG_HX711_GPIO_CLOCK,
-      .motor_pwm_gpio = 15,
-      .motor_dir_gpio = 16,
+      .motor_rpwm_gpio = 15,
+      .motor_lpwm_gpio = 16,
+      .motor_r_en_gpio = 17,
+      .motor_l_en_gpio = 18,
       .button_run_gpio = 10,
       .button_stop_gpio = 11,
       .button_estop_gpio = 12,
@@ -205,8 +207,10 @@ esp_err_t control_manager_init(control_manager_handle_t *handle,
 
   // === Initialize Motor ===
   motor_config_t mot_cfg = motor_get_default_config();
-  mot_cfg.gpio_pwm = config->motor_pwm_gpio;
-  mot_cfg.gpio_dir = config->motor_dir_gpio;
+  mot_cfg.gpio_rpwm = config->motor_rpwm_gpio;
+  mot_cfg.gpio_lpwm = config->motor_lpwm_gpio;
+  mot_cfg.gpio_r_en = config->motor_r_en_gpio;
+  mot_cfg.gpio_l_en = config->motor_l_en_gpio;
   ret = motor_init(&mot_cfg, &mgr->motor);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "Motor init failed: %s", esp_err_to_name(ret));
@@ -560,10 +564,19 @@ void control_manager_start_autotune(control_manager_handle_t handle,
 
   autotune_config_t cfg = autotune_get_default_config();
   cfg.loop = speed_loop ? AUTOTUNE_SPEED_LOOP : AUTOTUNE_TENSION_LOOP;
-  // Use 30% of max RPM for speed tune (safe operating point)
-  cfg.setpoint = speed_loop ? 600.0f : handle->tension_setpoint;
+
+  // Fetch user-defined autotune speed from NVS (default 150)
+  uint16_t auto_spd = 150;
+  nvs_handle_t nvs;
+  if (nvs_open("config", NVS_READONLY, &nvs) == ESP_OK) {
+    nvs_get_u16(nvs, "autotune_speed", &auto_spd);
+    nvs_close(nvs);
+  }
+
+  // Use the fetched operating point for speed tuning
+  cfg.setpoint = speed_loop ? (float)auto_spd : handle->tension_setpoint;
   cfg.relay_amplitude = 20.0f;
-  cfg.bias = 50.0f;
+  cfg.bias = 30.0f;
 
   autotune_start(handle->autotuner, &cfg);
 
@@ -572,6 +585,12 @@ void control_manager_start_autotune(control_manager_handle_t handle,
   // Enable speed PI for tension tuning (inner loop must stay active)
   if (!speed_loop) {
     pi_set_enabled(&handle->speed_pi, true);
+  }
+
+  // Store the autotune speed setpoint temporarily in the handle for continuous
+  // update We'll borrow speed_setpoint for this during TUNING_SPEED mode
+  if (speed_loop) {
+    handle->speed_setpoint = (float)auto_spd;
   }
   xSemaphoreGive(handle->mutex);
 
@@ -684,6 +703,7 @@ static void run_control_loop(control_manager_handle_t mgr) {
   // === Safety Check ===
   safety_readings_t readings = {
       .tension_kg = tension_kg,
+      .setpoint_kg = mgr->tension_setpoint,
       .speed_rpm = speed_rpm,
       .pwm_percent = motor_get_speed(mgr->motor),
       .encoder_active = encoder_is_active(mgr->encoder, 500),
@@ -727,7 +747,9 @@ static void run_control_loop(control_manager_handle_t mgr) {
     case MODE_TUNING_SPEED:
       // Speed loop auto-tune: relay output goes directly to PWM
       if (autotune_is_active(mgr->autotuner)) {
-        new_pwm_output = autotune_update(mgr->autotuner, 600.0f, speed_rpm);
+        // Use the dynamically fetched target setpoint from config
+        new_pwm_output =
+            autotune_update(mgr->autotuner, mgr->speed_setpoint, speed_rpm);
       }
       break;
 

@@ -21,6 +21,7 @@ typedef struct {
   float speed_rpm;
   float speed_setpoint;
   float pwm_percent;
+  uint8_t mode;
   uint8_t system_state;
   uint16_t fault_flags;
   bool calibrated;

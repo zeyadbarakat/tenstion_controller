@@ -20,7 +20,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -79,6 +78,7 @@ typedef struct {
  */
 typedef struct {
   float tension_kg;
+  float setpoint_kg;
   float speed_rpm;
   float pwm_percent;
   bool encoder_active;

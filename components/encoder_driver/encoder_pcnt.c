@@ -51,8 +51,8 @@ static const char *TAG = "encoder";
  * Private Definitions
  ******************************************************************************/
 
-#define PCNT_HIGH_LIMIT 1000 // Watch point for overflow
-#define PCNT_LOW_LIMIT -1000 // Watch point for underflow
+#define PCNT_HIGH_LIMIT 10000 // Hardware limit before reset to 0
+#define PCNT_LOW_LIMIT -10000 // Hardware limit before reset to 0
 #define MAX_FILTER_SIZE 20
 #define US_PER_MINUTE 60000000ULL
 
@@ -74,9 +74,9 @@ struct encoder_s {
   uint32_t cpr; // Counts per revolution (PPR * 4)
   uint8_t filter_size;
 
-  // Count accumulation
-  volatile int32_t overflow_count; // Accumulated overflow counts
-  volatile int32_t total_count;    // Total count (overflow + current)
+  // Manual Accumulation
+  int32_t prev_hw_count;
+  int64_t total_count_unwrapped;
 
   // RPM calculation
   int32_t prev_count;   // Previous count for delta calculation
@@ -101,9 +101,6 @@ struct encoder_s {
  * Private Function Prototypes
  ******************************************************************************/
 
-static bool IRAM_ATTR encoder_pcnt_overflow_callback(
-    pcnt_unit_handle_t unit, const pcnt_watch_event_data_t *edata,
-    void *user_ctx);
 static float encoder_apply_filter(encoder_handle_t handle, float new_rpm);
 
 /*******************************************************************************
@@ -157,12 +154,13 @@ esp_err_t encoder_init(const encoder_config_t *config,
     return ESP_ERR_NO_MEM;
   }
 
-  // Configure PCNT unit
+  // Configure PCNT unit without background ISR accumulation
   pcnt_unit_config_t unit_config = {
-      .high_limit = config->count_high,
+      .high_limit = config->count_high, // Resets to 0 upon reaching this
       .low_limit = config->count_low,
       .intr_priority = 0,
-      .flags.accum_count = true, // Enable accumulation mode
+      .flags.accum_count =
+          false, // Disable background ISR accumulation completely
   };
 
   esp_err_t ret = pcnt_new_unit(&unit_config, &enc->pcnt_unit);
@@ -245,15 +243,9 @@ esp_err_t encoder_init(const encoder_config_t *config,
                                 PCNT_CHANNEL_LEVEL_ACTION_KEEP,
                                 PCNT_CHANNEL_LEVEL_ACTION_INVERSE);
 
-  // Add watch points for overflow/underflow detection
+  // Add watch points for hardware resets
   pcnt_unit_add_watch_point(enc->pcnt_unit, config->count_high);
   pcnt_unit_add_watch_point(enc->pcnt_unit, config->count_low);
-
-  // Register overflow callback
-  pcnt_event_callbacks_t callbacks = {
-      .on_reach = encoder_pcnt_overflow_callback,
-  };
-  pcnt_unit_register_event_callbacks(enc->pcnt_unit, &callbacks, enc);
 
   // Enable and start PCNT unit
   pcnt_unit_enable(enc->pcnt_unit);
@@ -289,11 +281,8 @@ int32_t encoder_get_count(encoder_handle_t handle) {
     return 0;
   }
 
-  int pcnt_count = 0;
-  pcnt_unit_get_count(handle->pcnt_unit, &pcnt_count);
-
   xSemaphoreTake(handle->mutex, portMAX_DELAY);
-  int32_t total = handle->overflow_count + pcnt_count;
+  int32_t total = (int32_t)handle->total_count_unwrapped;
   xSemaphoreGive(handle->mutex);
 
   return total;
@@ -307,8 +296,8 @@ esp_err_t encoder_reset_count(encoder_handle_t handle) {
   xSemaphoreTake(handle->mutex, portMAX_DELAY);
 
   pcnt_unit_clear_count(handle->pcnt_unit);
-  handle->overflow_count = 0;
-  handle->total_count = 0;
+  handle->prev_hw_count = 0;
+  handle->total_count_unwrapped = 0;
   handle->prev_count = 0;
 
   // Reset filter
@@ -330,13 +319,42 @@ esp_err_t encoder_update(encoder_handle_t handle) {
   }
 
   int64_t now_us = esp_timer_get_time();
-  int32_t current_count = encoder_get_count(handle);
 
   xSemaphoreTake(handle->mutex, portMAX_DELAY);
+
+  // --- MANUAL UNWRAP LOGIC ---
+  int hw_count = 0;
+  pcnt_unit_get_count(handle->pcnt_unit, &hw_count);
+
+  int32_t unwrap_delta = hw_count - handle->prev_hw_count;
+
+  // Hardware resets to 0 when it reaches limits (±10000)
+  if (unwrap_delta < -5000) {
+    unwrap_delta += 10000; // Wrapped forward
+  } else if (unwrap_delta > 5000) {
+    unwrap_delta -= 10000; // Wrapped backwards
+  }
+
+  handle->total_count_unwrapped += unwrap_delta;
+  handle->prev_hw_count = hw_count;
+
+  int32_t current_count = (int32_t)handle->total_count_unwrapped;
 
   // Calculate delta count and time
   int32_t delta_count = current_count - handle->prev_count;
   int64_t delta_time_us = now_us - handle->prev_time_us;
+
+  // RTOS Jitter Fix: The control loop uses vTaskDelayUntil (100ms).
+  // If delayed, FreeRTOS catches up by immediately triggering the next loop
+  // with ~0us elapsed time. If we process <10ms intervals, delta_count
+  // is often 0, injecting a false 0-RPM sample that destroys the moving
+  // average.
+  if (delta_time_us < 10000) {
+    // Ignore updates that are too fast (less than 10ms).
+    // Let time & counts accumulate for the next valid interval.
+    xSemaphoreGive(handle->mutex);
+    return ESP_OK;
+  }
 
   // Prevent division by zero and handle wrap-around
   if (delta_time_us > 0 && delta_time_us < 1000000) { // Max 1 second
@@ -369,7 +387,6 @@ esp_err_t encoder_update(encoder_handle_t handle) {
   // Update previous values for next calculation
   handle->prev_count = current_count;
   handle->prev_time_us = now_us;
-  handle->total_count = current_count;
 
   xSemaphoreGive(handle->mutex);
 
@@ -433,28 +450,6 @@ uint32_t encoder_get_idle_time_ms(encoder_handle_t handle) {
 /*******************************************************************************
  * Private Function Implementations
  ******************************************************************************/
-
-/**
- * @brief PCNT overflow/underflow callback (runs in ISR context)
- *
- * When the counter reaches the high or low watch point, this callback
- * is triggered. We accumulate the count and clear the counter.
- */
-static bool IRAM_ATTR encoder_pcnt_overflow_callback(
-    pcnt_unit_handle_t unit, const pcnt_watch_event_data_t *edata,
-    void *user_ctx) {
-  struct encoder_s *enc = (struct encoder_s *)user_ctx;
-  BaseType_t high_task_wakeup = pdFALSE;
-
-  // Accumulate the watch point value (high or low limit)
-  enc->overflow_count += edata->watch_point_value;
-  enc->last_pulse_time_us = esp_timer_get_time();
-
-  // Note: PCNT counter is automatically cleared after reaching watch point
-  // when using accumulation mode
-
-  return high_task_wakeup == pdTRUE;
-}
 
 /**
  * @brief Apply moving average filter to RPM value

@@ -180,10 +180,11 @@ static void ws_broadcast_task(void *param) {
           json_buf, sizeof(json_buf),
           "{\"tension\":%.2f,\"tensionSP\":%.1f,\"speed\":%.0f,\"speedSP\":%."
           "0f,"
-          "\"pwm\":%.1f,\"state\":%d,\"faults\":%d,\"cal\":%d,\"uptime\":%lu}",
+          "\"pwm\":%.1f,\"state\":%d,\"mode\":%d,\"faults\":%d,\"cal\":%d,"
+          "\"uptime\":%lu}",
           status.tension_kg, status.tension_setpoint, status.speed_rpm,
           status.speed_setpoint, status.pwm_percent, status.system_state,
-          status.fault_flags, status.calibrated ? 1 : 0,
+          status.mode, status.fault_flags, status.calibrated ? 1 : 0,
           (unsigned long)status.uptime_seconds);
 
       // Broadcast to all WebSocket clients
@@ -350,8 +351,9 @@ void app_main(void) {
            PIN_ENCODER_B, ENCODER_PPR);
   ESP_LOGI(TAG, "  HX711:   GPIO DATA=%d, CLK=%d", PIN_HX711_DATA,
            PIN_HX711_CLOCK);
-  ESP_LOGI(TAG, "  Motor:   GPIO PWM=%d, DIR=%d, Freq=%d Hz", PIN_MOTOR_PWM,
-           PIN_MOTOR_DIR, MOTOR_PWM_FREQ_HZ);
+  ESP_LOGI(TAG, "  Motor:   GPIO RPWM=%d, LPWM=%d, EN=%d/%d, Freq=%d Hz",
+           PIN_MOTOR_RPWM, PIN_MOTOR_LPWM, PIN_MOTOR_R_EN, PIN_MOTOR_L_EN,
+           MOTOR_PWM_FREQ_HZ);
   ESP_LOGI(TAG, "  Buttons: RUN=%d, STOP=%d, ESTOP=%d", PIN_BTN_RUN,
            PIN_BTN_STOP, PIN_BTN_ESTOP);
   ESP_LOGI(TAG, "");
@@ -364,8 +366,10 @@ void app_main(void) {
   config.encoder_b_gpio = PIN_ENCODER_B;
   config.hx711_data_gpio = PIN_HX711_DATA;
   config.hx711_clock_gpio = PIN_HX711_CLOCK;
-  config.motor_pwm_gpio = PIN_MOTOR_PWM;
-  config.motor_dir_gpio = PIN_MOTOR_DIR;
+  config.motor_rpwm_gpio = PIN_MOTOR_RPWM;
+  config.motor_lpwm_gpio = PIN_MOTOR_LPWM;
+  config.motor_r_en_gpio = PIN_MOTOR_R_EN;
+  config.motor_l_en_gpio = PIN_MOTOR_L_EN;
   config.button_run_gpio = PIN_BTN_RUN;
   config.button_stop_gpio = PIN_BTN_STOP;
   config.button_estop_gpio = PIN_BTN_ESTOP;
@@ -421,7 +425,7 @@ void app_main(void) {
   static uint32_t btn_press_time = 0;
 
   while (1) {
-    vTaskDelay(pdMS_TO_TICKS(500)); // 500ms interval for LED update
+    vTaskDelay(pdMS_TO_TICKS(100)); // 100ms interval for faster updates
 
     loop_count++;
 
@@ -429,43 +433,43 @@ void app_main(void) {
     system_status_t status;
     control_manager_get_status(g_ctrl_mgr, &status);
 
-    // LED pattern: 3 status flashes + 1 WiFi indicator flash
-    // Pattern cycles: [Status ON, Status OFF, Status ON, Status OFF, Status ON,
-    // Status OFF, WiFi ON, WiFi OFF] Using loop_count with 500ms delay = 4
-    // second full cycle
     static uint8_t led_phase = 0;
-    led_phase = (led_phase + 1) % 8; // 8 phases for the pattern
 
-    // GRB color order for WS2812
-    uint8_t g = 0, r = 0, b = 0;
+    // Update LED pattern only every 500ms to preserve correct flash frequency
+    if (loop_count % 5 == 0) {
+      led_phase = (led_phase + 1) % 8; // 8 phases for the pattern
 
-    if (led_phase < 6) {
-      // Phases 0-5: Status color (3 blinks = on/off/on/off/on/off)
-      bool on = (led_phase % 2 == 0); // Even phases = LED on
-      if (status.fault_flags != 0) {
-        // Fault - red
-        r = on ? 40 : 0;
+      // GRB color order for WS2812
+      uint8_t g = 0, r = 0, b = 0;
+
+      if (led_phase < 6) {
+        // Phases 0-5: Status color (3 blinks = on/off/on/off/on/off)
+        bool on = (led_phase % 2 == 0); // Even phases = LED on
+        if (status.fault_flags != 0) {
+          // Fault - red
+          r = on ? 40 : 0;
+        } else {
+          // Normal - green
+          g = on ? 20 : 0;
+        }
       } else {
-        // Normal - green
-        g = on ? 20 : 0;
+        // Phases 6-7: WiFi indicator (1 blink)
+        bool on = (led_phase == 6);
+        if (wifi_enabled) {
+          // WiFi on - blue
+          b = on ? 30 : 0;
+        }
+        // WiFi off - no light (just stays off)
       }
-    } else {
-      // Phases 6-7: WiFi indicator (1 blink)
-      bool on = (led_phase == 6);
-      if (wifi_enabled) {
-        // WiFi on - blue
-        b = on ? 30 : 0;
-      }
-      // WiFi off - no light (just stays off)
+
+      led_set_color(g, r, b);
     }
 
-    led_set_color(g, r, b);
-
-    // Check flash button for WiFi toggle (GPIO0)
     if (gpio_get_level(FLASH_BUTTON_GPIO) == 0) {
       if (btn_press_time == 0) {
         btn_press_time = loop_count;
-      } else if (loop_count - btn_press_time >= 2) { // ~1 second hold
+      } else if (loop_count - btn_press_time >=
+                 10) { // ~1 second hold (10 * 100ms)
         wifi_enabled = !wifi_enabled;
         if (wifi_enabled) {
           esp_wifi_start();
@@ -489,8 +493,8 @@ void app_main(void) {
       btn_press_time = 0;
     }
 
-    // Log status every 10 loops (5 seconds)
-    if (loop_count % 10 == 0) {
+    // Log status every 30 loops (3 seconds)
+    if (loop_count % 30 == 0) {
       ESP_LOGI(TAG,
                "[%lu] Status: State=%d, Tension=%.2f/%.2f kg, Speed=%.0f rpm, "
                "PWM=%.1f%%",

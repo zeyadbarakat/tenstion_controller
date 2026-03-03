@@ -38,6 +38,7 @@ struct safety_s {
   int64_t last_encoder_pulse_us;
   int64_t stall_start_us;
   int64_t watchdog_last_feed_us;
+  int64_t state_entered_us; // Time when state was changed
   bool in_stall_condition;
 
   // Fault tracking
@@ -149,7 +150,7 @@ system_state_t safety_check(safety_handle_t handle,
   // Must provide enough PWM to overcome static friction before expecting
   // movement
   if (!readings->encoder_active && handle->state == SYSTEM_STATE_RUNNING &&
-      readings->pwm_percent > 15.0f) {
+      readings->pwm_percent > 25.0f) {
     int64_t idle_time_ms = (now - handle->last_encoder_pulse_us) / 1000;
     if (idle_time_ms > handle->limits.encoder_timeout_ms) {
       set_fault(handle, FAULT_ENCODER_FAILURE);
@@ -163,6 +164,7 @@ system_state_t safety_check(safety_handle_t handle,
   if (handle->state == SYSTEM_STATE_STARTING &&
       handle->active_faults == FAULT_NONE) {
     handle->state = SYSTEM_STATE_RUNNING;
+    handle->state_entered_us = now;
     ESP_LOGI(TAG, "Safety checks passed - transitioning to RUNNING");
   }
 
@@ -170,10 +172,16 @@ system_state_t safety_check(safety_handle_t handle,
   if (handle->state == SYSTEM_STATE_RUNNING ||
       handle->state == SYSTEM_STATE_WARNING) {
     // Tension limits
+    float dynamic_min_tension = handle->limits.min_tension_kg;
+    // Scale down the minimum tension limit if the setpoint is exceptionally low
+    if (readings->setpoint_kg > 0.0f && readings->setpoint_kg < 2.0f) {
+      dynamic_min_tension = readings->setpoint_kg * 0.20f; // 20% of setpoint
+    }
+
     float max_with_hyst =
         handle->limits.max_tension_kg * (1.0f + HYSTERESIS_PERCENT / 100.0f);
     float min_with_hyst =
-        handle->limits.min_tension_kg * (1.0f - HYSTERESIS_PERCENT / 100.0f);
+        dynamic_min_tension * (1.0f - HYSTERESIS_PERCENT / 100.0f);
 
     if (readings->tension_kg > max_with_hyst) {
       set_fault(handle, FAULT_OVER_TENSION);
@@ -181,9 +189,16 @@ system_state_t safety_check(safety_handle_t handle,
       clear_fault(handle, FAULT_OVER_TENSION);
     }
 
-    if (readings->tension_kg < min_with_hyst && readings->tension_kg > 0.01f) {
-      set_fault(handle, FAULT_UNDER_TENSION);
-    } else if (readings->tension_kg > handle->limits.min_tension_kg) {
+    // Calculate time since entering RUNNING state
+    int64_t running_time_ms = (now - handle->state_entered_us) / 1000;
+
+    // Suppress under-tension faults during the first 8 seconds of RUNNING
+    // to allow the machine to build initial tension from a slack state.
+    if (readings->tension_kg < min_with_hyst && readings->tension_kg > 0.05f) {
+      if (running_time_ms > 8000) {
+        set_fault(handle, FAULT_UNDER_TENSION);
+      }
+    } else if (readings->tension_kg > dynamic_min_tension) {
       clear_fault(handle, FAULT_UNDER_TENSION);
     }
 

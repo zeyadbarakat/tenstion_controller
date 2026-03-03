@@ -18,7 +18,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -48,11 +47,13 @@ typedef enum {
 } motor_state_t;
 
 /**
- * @brief Motor configuration structure
+ * @brief Motor configuration structure (IBT-2 Half-Bridge)
  */
 typedef struct {
-  int gpio_pwm;           /**< GPIO for PWM output */
-  int gpio_dir;           /**< GPIO for direction control */
+  int gpio_rpwm;          /**< GPIO for Forward PWM (IBT-2 RPWM) */
+  int gpio_lpwm;          /**< GPIO for Reverse PWM (IBT-2 LPWM) */
+  int gpio_r_en;          /**< GPIO for Forward Enable (IBT-2 R_EN) */
+  int gpio_l_en;          /**< GPIO for Reverse Enable (IBT-2 L_EN) */
   uint32_t pwm_freq_hz;   /**< PWM frequency (default 25000) */
   uint8_t pwm_resolution; /**< PWM resolution in bits (default 10) */
   float ramp_rate;        /**< Ramp rate in %/second (default 100) */

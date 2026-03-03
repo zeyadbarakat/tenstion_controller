@@ -11,8 +11,10 @@ A production-ready cascaded PI tension control system for unwinding applications
 
 - **Cascaded PI Control** — Outer tension loop, inner speed loop for smooth unwinding
 - **Relay Feedback Auto-Tuning** — Åström-Hägglund method with No-Overshoot tuning rule
+- **Adjustable Auto-Tune** — Modifiable tuning RPM directly from the Web API & Dashboard
 - **20x4 I2C LCD & 1x4 Keypad** — Full physical interface for standalone operation
 - **Real-Time WebSocket Dashboard** — 50Hz Chart.js graphs via WebSocket push
+- **Extended Tension Envelope** — Setpoints up to 200kg supported natively
 - **PCNT Quadrature Encoder** — Hardware 4x decoding, 600 PPR supported
 - **HX711 Load Cell** — 24-bit ADC with NVS calibration storage
 - **Safety Monitoring** — E-STOP, fault detection, state machine with hardware TWDT watchdog
@@ -82,27 +84,29 @@ The cascaded PI controller continuously adjusts the PWM output — no jerky star
                Pullup   └─────────────┘
 ```
 
-### Pin Assignment Table
+### ESP32-S3 Pin Assignments (v1.2.0 defaults for IBT-2)
 
-| Function | GPIO | Notes |
-|----------|------|-------|
-| KEY1 (▲) | 1 | Tension up / Menu enter |
-| KEY2 (OK)| 2 | Confirm / Menu OK |
-| Encoder A| 4 | PCNT quadrature A |
-| Encoder B| 5 | PCNT quadrature B |
-| KEY3 (◄) | 6 | Jog left / Navigate up |
-| KEY4 (►) | 7 | Jog right / Navigate down |
-| LCD SDA  | 8 | I2C Data (0x27) |
-| LCD SCL  | 9 | I2C Clock |
-| RUN Button| 10 | Standalone Start |
-| STOP Button| 11 | Standalone Stop |
-| E-STOP   | 12 | Hardware Emergency Stop (NC) |
-| HX711 Data| 13 | Load cell Data |
-| HX711 CLK | 14 | Load cell Clock |
-| Motor PWM | 15 | 25kHz PWM Output |
-| Motor DIR | 16 | Direction Signal |
-| LED Run   | 17 | Green status LED |
-| LED Fault | 18 | Red fault LED |
+| Component | ESP32-S3 Pin | Notes |
+| :--- | :--- | :--- |
+| **I2C LCD** | GPIO 8 (SDA) | Pull-ups required if not on module |
+| | GPIO 9 (SCL) | Pull-ups required if not on module |
+| **Keypad (1x4)**| GPIO 1 (Key1) | ▲ Tension Up / Menu Enter (Internal Pull-up) |
+| | GPIO 2 (Key2) | ▼ Tension Down / Menu OK (Internal Pull-up) |
+| | GPIO 6 (Key3) | ◄ Jog Left / Menu Nav Up (Internal Pull-up) |
+| | GPIO 7 (Key4) | ► Jog Right / Menu Nav Down (Internal Pull-up) |
+| **Encoder** | GPIO 4 (A) | A phase |
+| | GPIO 5 (B) | B phase |
+| **Load Cell** | GPIO 13 (DT) | HX711 Data |
+| | GPIO 14 (SCK)| HX711 Clock |
+| **IBT-2 Motor Driver**| GPIO 15 (RPWM) | Forward PWM (25kHz) |
+| | GPIO 16 (LPWM) | Reverse PWM (25kHz) |
+| | GPIO 17 (R_EN) | Forward Enable |
+| | GPIO 18 (L_EN) | Reverse Enable |
+| **Control Btns**| GPIO 10 (RUN) | Start system (Internal Pull-up) |
+| | GPIO 11 (STOP)| Stop / Clear Faults (Internal Pull-up) |
+| | GPIO 12 (ESTOP)| Emergency Stop (NC contacts to GND) |
+| **Indicators** | GPIO 41 (RUN_LED)| Green running indicator |
+| | GPIO 42 (FLT_LED)| Red fault indicator |
 
 > **⚠️ Safety Note**: The E-STOP should also have an independent relay to cut motor power directly, regardless of software state.
 
