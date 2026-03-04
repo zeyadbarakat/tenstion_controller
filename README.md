@@ -10,6 +10,7 @@ A production-ready cascaded PI tension control system for unwinding applications
 ## Features
 
 - **Cascaded PI Control** — Outer tension loop, inner speed loop for smooth unwinding
+- **Unwinder Sign Inversion** — Negated tension PI output for inverse plant (more speed = less tension)
 - **Relay Feedback Auto-Tuning** — Åström-Hägglund method with No-Overshoot tuning rule
 - **Adjustable Auto-Tune** — Modifiable tuning RPM directly from the Web API & Dashboard
 - **20x4 I2C LCD & 1x4 Keypad** — Full physical interface for standalone operation
@@ -17,6 +18,8 @@ A production-ready cascaded PI tension control system for unwinding applications
 - **Extended Tension Envelope** — Setpoints up to 200kg supported natively
 - **PCNT Quadrature Encoder** — Hardware 4x decoding, 600 PPR supported
 - **HX711 Load Cell** — 24-bit ADC with NVS calibration storage
+- **Safety Configuration** — All 12 safety parameters configurable via web UI Safety tab with NVS persistence
+- **Live Hot-Reload** — PI gains and safety limits apply instantly without system reset
 - **Safety Monitoring** — E-STOP, fault detection, state machine with hardware TWDT watchdog
 - **Persistent Tuning** — PI gains saved to NVS (x10000 precision), restored on boot automatically
 

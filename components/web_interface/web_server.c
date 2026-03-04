@@ -2,8 +2,14 @@
  * @file web_server.c
  * @brief HTTP Server Implementation with REST API and WebSocket
  *
- * Supports both HTTP polling (/api/status) and WebSocket push (/ws).
- * WebSocket provides real-time updates at 50Hz for smooth charts.
+ * REST API endpoints:
+ *   GET  /api/status  - Real-time system status
+ *   POST /api/command - Send control commands
+ *   GET  /api/config  - Read tuning/calibration configuration
+ *   POST /api/config  - Save tuning/calibration (NVS + live reload)
+ *   GET  /api/safety  - Read safety limit parameters
+ *   POST /api/safety  - Save safety limits (NVS + live hot-reload)
+ *   WS   /ws          - WebSocket push at 50Hz for real-time charts
  */
 
 #include "web_server.h"
@@ -12,6 +18,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "nvs_flash.h"
+#include "safety.h"
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,6 +56,8 @@ static esp_err_t api_status_handler(httpd_req_t *req);
 static esp_err_t api_command_handler(httpd_req_t *req);
 static esp_err_t api_config_get_handler(httpd_req_t *req);
 static esp_err_t api_config_post_handler(httpd_req_t *req);
+static esp_err_t api_safety_get_handler(httpd_req_t *req);
+static esp_err_t api_safety_post_handler(httpd_req_t *req);
 static esp_err_t ws_handler(httpd_req_t *req);
 
 // WebSocket client management
@@ -134,6 +143,19 @@ esp_err_t web_server_start(web_server_handle_t handle) {
                                  .user_ctx = handle};
   httpd_register_uri_handler(handle->server, &api_config_post);
 
+  // Safety API endpoints
+  httpd_uri_t api_safety_get = {.uri = "/api/safety",
+                                .method = HTTP_GET,
+                                .handler = api_safety_get_handler,
+                                .user_ctx = handle};
+  httpd_register_uri_handler(handle->server, &api_safety_get);
+
+  httpd_uri_t api_safety_post = {.uri = "/api/safety",
+                                 .method = HTTP_POST,
+                                 .handler = api_safety_post_handler,
+                                 .user_ctx = handle};
+  httpd_register_uri_handler(handle->server, &api_safety_post);
+
   // WebSocket endpoint for real-time updates
   httpd_uri_t ws_uri = {.uri = "/ws",
                         .method = HTTP_GET,
@@ -217,6 +239,9 @@ static esp_err_t api_status_handler(httpd_req_t *req) {
   cJSON_AddBoolToObject(root, "calibrated", status.calibrated);
   cJSON_AddNumberToObject(root, "uptime", status.uptime_seconds);
   cJSON_AddNumberToObject(root, "heap", esp_get_free_heap_size());
+  if (status.detected_rpm > 0) {
+    cJSON_AddNumberToObject(root, "detected_rpm", status.detected_rpm);
+  }
 
   char *json = cJSON_PrintUnformatted(root);
   cJSON_Delete(root);
@@ -429,6 +454,17 @@ static esp_err_t api_config_post_handler(httpd_req_t *req) {
     nvs_set_i32(nvs, "tension_ki", (int32_t)(item->valuedouble * 10000.0));
     ESP_LOGI(TAG, "Saved tension_ki: %f", item->valuedouble);
   }
+
+  // If any Kp/Ki was changed, apply immediately to live PI controllers
+  if (cJSON_GetObjectItem(root, "speed_kp") ||
+      cJSON_GetObjectItem(root, "speed_ki") ||
+      cJSON_GetObjectItem(root, "tension_kp") ||
+      cJSON_GetObjectItem(root, "tension_ki")) {
+    struct web_server_s *srv = (struct web_server_s *)req->user_ctx;
+    if (srv && srv->cmd_callback) {
+      srv->cmd_callback(WEB_CMD_SET_PI_GAINS, 0, srv->cmd_user_data);
+    }
+  }
   if ((item = cJSON_GetObjectItem(root, "ema_alpha")) != NULL) {
     int32_t alpha_int = item->valueint;
     nvs_set_i32(nvs, "ema_alpha", alpha_int);
@@ -458,6 +494,119 @@ static esp_err_t api_config_post_handler(httpd_req_t *req) {
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   httpd_resp_send(req, "{\"ok\":true,\"saved\":true}", -1);
+  return ESP_OK;
+}
+
+// === Safety API ===
+
+static esp_err_t api_safety_get_handler(httpd_req_t *req) {
+  // Read current limits via NVS blob (or defaults if NVS is empty)
+  safety_limits_t limits = safety_get_default_limits();
+
+  nvs_handle_t nvs;
+  if (nvs_open("safety", NVS_READONLY, &nvs) == ESP_OK) {
+    size_t size = sizeof(safety_limits_t);
+    nvs_get_blob(nvs, "limits", &limits, &size);
+    nvs_close(nvs);
+  }
+
+  cJSON *root = cJSON_CreateObject();
+  cJSON_AddNumberToObject(root, "max_tension_kg", limits.max_tension_kg);
+  cJSON_AddNumberToObject(root, "min_tension_kg", limits.min_tension_kg);
+  cJSON_AddNumberToObject(root, "max_speed_rpm", limits.max_speed_rpm);
+  cJSON_AddNumberToObject(root, "warning_threshold",
+                          limits.warning_threshold * 100.0f);
+  cJSON_AddNumberToObject(root, "stall_timeout_ms", limits.stall_timeout_ms);
+  cJSON_AddNumberToObject(root, "encoder_timeout_ms",
+                          limits.encoder_timeout_ms);
+  cJSON_AddNumberToObject(root, "hysteresis_percent",
+                          limits.hysteresis_percent);
+  cJSON_AddNumberToObject(root, "under_tension_floor_kg",
+                          limits.under_tension_floor_kg);
+  cJSON_AddNumberToObject(root, "startup_suppress_ms",
+                          limits.startup_suppress_ms);
+  cJSON_AddNumberToObject(root, "encoder_pwm_threshold",
+                          limits.encoder_pwm_threshold);
+  cJSON_AddNumberToObject(root, "stall_pwm_threshold",
+                          limits.stall_pwm_threshold);
+  cJSON_AddNumberToObject(root, "stall_speed_threshold",
+                          limits.stall_speed_threshold);
+
+  char *json = cJSON_PrintUnformatted(root);
+  cJSON_Delete(root);
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_sendstr(req, json);
+  free(json);
+  return ESP_OK;
+}
+
+static esp_err_t api_safety_post_handler(httpd_req_t *req) {
+  char buf[512];
+  int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+  if (len <= 0) {
+    httpd_resp_send_500(req);
+    return ESP_FAIL;
+  }
+  buf[len] = '\0';
+
+  cJSON *root = cJSON_Parse(buf);
+  if (root == NULL) {
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+    return ESP_FAIL;
+  }
+
+  // Start with current limits (from NVS or defaults)
+  safety_limits_t limits = safety_get_default_limits();
+  nvs_handle_t nvs;
+  if (nvs_open("safety", NVS_READONLY, &nvs) == ESP_OK) {
+    size_t size = sizeof(safety_limits_t);
+    nvs_get_blob(nvs, "limits", &limits, &size);
+    nvs_close(nvs);
+  }
+
+  // Update from JSON
+  cJSON *item;
+  if ((item = cJSON_GetObjectItem(root, "max_tension_kg")))
+    limits.max_tension_kg = (float)item->valuedouble;
+  if ((item = cJSON_GetObjectItem(root, "min_tension_kg")))
+    limits.min_tension_kg = (float)item->valuedouble;
+  if ((item = cJSON_GetObjectItem(root, "max_speed_rpm")))
+    limits.max_speed_rpm = (float)item->valuedouble;
+  if ((item = cJSON_GetObjectItem(root, "warning_threshold")))
+    limits.warning_threshold = (float)item->valuedouble / 100.0f;
+  if ((item = cJSON_GetObjectItem(root, "stall_timeout_ms")))
+    limits.stall_timeout_ms = (uint32_t)item->valuedouble;
+  if ((item = cJSON_GetObjectItem(root, "encoder_timeout_ms")))
+    limits.encoder_timeout_ms = (uint32_t)item->valuedouble;
+  if ((item = cJSON_GetObjectItem(root, "hysteresis_percent")))
+    limits.hysteresis_percent = (float)item->valuedouble;
+  if ((item = cJSON_GetObjectItem(root, "under_tension_floor_kg")))
+    limits.under_tension_floor_kg = (float)item->valuedouble;
+  if ((item = cJSON_GetObjectItem(root, "startup_suppress_ms")))
+    limits.startup_suppress_ms = (uint32_t)item->valuedouble;
+  if ((item = cJSON_GetObjectItem(root, "encoder_pwm_threshold")))
+    limits.encoder_pwm_threshold = (float)item->valuedouble;
+  if ((item = cJSON_GetObjectItem(root, "stall_pwm_threshold")))
+    limits.stall_pwm_threshold = (float)item->valuedouble;
+  if ((item = cJSON_GetObjectItem(root, "stall_speed_threshold")))
+    limits.stall_speed_threshold = (float)item->valuedouble;
+
+  // Save blob to NVS
+  if (nvs_open("safety", NVS_READWRITE, &nvs) == ESP_OK) {
+    nvs_set_blob(nvs, "limits", &limits, sizeof(safety_limits_t));
+    nvs_commit(nvs);
+    nvs_close(nvs);
+  }
+
+  // Fire command to apply live
+  struct web_server_s *s = (struct web_server_s *)req->user_ctx;
+  if (s && s->cmd_callback) {
+    s->cmd_callback(WEB_CMD_SET_SAFETY, 0, s->cmd_user_data);
+  }
+
+  cJSON_Delete(root);
+  ESP_LOGI(TAG, "Safety limits saved and applied");
+  httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
   return ESP_OK;
 }
 

@@ -1,6 +1,12 @@
 /**
  * @file safety.c
  * @brief Safety Monitor Implementation
+ *
+ * All safety thresholds are stored in the safety_limits_t struct,
+ * persisted as an NVS blob, and configurable via the web /api/safety
+ * endpoint. Previously hardcoded constants (hysteresis, encoder/stall
+ * PWM thresholds, startup suppression, under-tension floor) are now
+ * runtime-configurable and apply live without reset.
  */
 
 #include "safety.h"
@@ -20,7 +26,6 @@ static const char *TAG = "safety";
  ******************************************************************************/
 
 #define NVS_NAMESPACE "safety"
-#define HYSTERESIS_PERCENT 5.0f // 5% hysteresis on limits
 
 /*******************************************************************************
  * Private Structures
@@ -74,6 +79,12 @@ safety_limits_t safety_get_default_limits(void) {
       .warning_threshold = 0.9f,
       .stall_timeout_ms = 2000,
       .encoder_timeout_ms = 2000,
+      .hysteresis_percent = 5.0f,
+      .under_tension_floor_kg = 0.05f,
+      .startup_suppress_ms = 8000,
+      .encoder_pwm_threshold = 25.0f,
+      .stall_pwm_threshold = 30.0f,
+      .stall_speed_threshold = 10.0f,
   };
   return limits;
 }
@@ -150,7 +161,7 @@ system_state_t safety_check(safety_handle_t handle,
   // Must provide enough PWM to overcome static friction before expecting
   // movement
   if (!readings->encoder_active && handle->state == SYSTEM_STATE_RUNNING &&
-      readings->pwm_percent > 25.0f) {
+      readings->pwm_percent > handle->limits.encoder_pwm_threshold) {
     int64_t idle_time_ms = (now - handle->last_encoder_pulse_us) / 1000;
     if (idle_time_ms > handle->limits.encoder_timeout_ms) {
       set_fault(handle, FAULT_ENCODER_FAILURE);
@@ -178,10 +189,10 @@ system_state_t safety_check(safety_handle_t handle,
       dynamic_min_tension = readings->setpoint_kg * 0.20f; // 20% of setpoint
     }
 
-    float max_with_hyst =
-        handle->limits.max_tension_kg * (1.0f + HYSTERESIS_PERCENT / 100.0f);
-    float min_with_hyst =
-        dynamic_min_tension * (1.0f - HYSTERESIS_PERCENT / 100.0f);
+    float max_with_hyst = handle->limits.max_tension_kg *
+                          (1.0f + handle->limits.hysteresis_percent / 100.0f);
+    float min_with_hyst = dynamic_min_tension *
+                          (1.0f - handle->limits.hysteresis_percent / 100.0f);
 
     if (readings->tension_kg > max_with_hyst) {
       set_fault(handle, FAULT_OVER_TENSION);
@@ -194,8 +205,9 @@ system_state_t safety_check(safety_handle_t handle,
 
     // Suppress under-tension faults during the first 8 seconds of RUNNING
     // to allow the machine to build initial tension from a slack state.
-    if (readings->tension_kg < min_with_hyst && readings->tension_kg > 0.05f) {
-      if (running_time_ms > 8000) {
+    if (readings->tension_kg < min_with_hyst &&
+        readings->tension_kg > handle->limits.under_tension_floor_kg) {
+      if (running_time_ms > (int64_t)handle->limits.startup_suppress_ms) {
         set_fault(handle, FAULT_UNDER_TENSION);
       }
     } else if (readings->tension_kg > dynamic_min_tension) {
@@ -210,7 +222,8 @@ system_state_t safety_check(safety_handle_t handle,
     }
 
     // Motor stall detection
-    if (fabsf(readings->speed_rpm) < 10.0f && readings->pwm_percent > 30.0f) {
+    if (fabsf(readings->speed_rpm) < handle->limits.stall_speed_threshold &&
+        readings->pwm_percent > handle->limits.stall_pwm_threshold) {
       if (!handle->in_stall_condition) {
         handle->stall_start_us = now;
         handle->in_stall_condition = true;

@@ -5,24 +5,32 @@
  * ESP32-S3 Tension Controller for Unwinding Applications
  * ======================================================
  *
+ * System: Motor → Gearbox → Wire Roll ~~wire~~ Loadcell ~~wire~~ Machine
+ * The machine pulls wire creating tension; the motor unwinds the roll
+ * to release wire and reduce tension (inverse plant relationship).
+ *
  * Features:
  * - Cascaded PI control (outer tension loop, inner speed loop)
- * - Relay feedback auto-tuning (Ziegler-Nichols)
+ * - Inverted output for unwinder (more speed = less tension)
+ * - Relay feedback auto-tuning (no-overshoot rule, Kp = 0.20 × Ku)
  * - Load cell with NVS calibration storage
  * - PCNT quadrature encoder for speed measurement
  * - PWM motor control with soft-start
- * - Safety monitoring with E-STOP support
- * - Web interface for monitoring and control
+ * - Safety monitoring with configurable limits (web UI + NVS)
+ * - Live hot-reload of PI gains and safety parameters
+ * - Web interface with Dashboard, Tuning, Calibration, Safety tabs
+ * - WebSocket real-time updates at 50Hz
  * - RGB LED status indicator
  *
  * Hardware:
  * - ESP32-S3 MCU
  * - 600 PPR quadrature encoder
  * - HX711 24-bit load cell ADC
- * - DC motor with H-bridge driver
+ * - DC motor with H-bridge driver (unidirectional unwinding)
+ * - Heavy gearbox (provides natural braking when motor stops)
  * - RUN/STOP/E-STOP buttons
  *
- * @copyright 2024
+ * @copyright 2026
  */
 
 #include "driver/gpio.h"
@@ -34,6 +42,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 #include <stdio.h>
 #include <string.h>
@@ -210,6 +219,7 @@ static void web_status_cb(web_status_data_t *status, void *user_data) {
     status->fault_flags = sys_status.fault_flags;
     status->calibrated = sys_status.calibrated;
     status->uptime_seconds = sys_status.uptime_seconds;
+    status->detected_rpm = sys_status.detected_rpm;
   }
 }
 
@@ -267,6 +277,36 @@ static void web_command_cb(web_command_t cmd, float value, void *user_data) {
   case WEB_CMD_SET_CAL_SCALE:
     control_manager_set_cal_scale(g_ctrl_mgr, value);
     break;
+  case WEB_CMD_DETECT_RPM:
+    control_manager_detect_rpm(g_ctrl_mgr);
+    break;
+  case WEB_CMD_SET_PI_GAINS: {
+    // Read freshly-saved gains from NVS and apply to live PI controllers
+    nvs_handle_t nvs;
+    if (nvs_open("config", NVS_READONLY, &nvs) == ESP_OK) {
+      int32_t skp = 5000, ski = 1000, tkp = 2000, tki = 500;
+      nvs_get_i32(nvs, "speed_kp", &skp);
+      nvs_get_i32(nvs, "speed_ki", &ski);
+      nvs_get_i32(nvs, "tension_kp", &tkp);
+      nvs_get_i32(nvs, "tension_ki", &tki);
+      nvs_close(nvs);
+      control_manager_set_pi_gains(g_ctrl_mgr, skp / 10000.0f, ski / 10000.0f,
+                                   tkp / 10000.0f, tki / 10000.0f);
+    }
+    break;
+  }
+  case WEB_CMD_SET_SAFETY: {
+    // Read freshly-saved safety limits and apply live
+    safety_limits_t limits = safety_get_default_limits();
+    nvs_handle_t nvs;
+    if (nvs_open("safety", NVS_READONLY, &nvs) == ESP_OK) {
+      size_t size = sizeof(safety_limits_t);
+      nvs_get_blob(nvs, "limits", &limits, &size);
+      nvs_close(nvs);
+    }
+    control_manager_set_safety_limits(g_ctrl_mgr, &limits);
+    break;
+  }
   default:
     break;
   }

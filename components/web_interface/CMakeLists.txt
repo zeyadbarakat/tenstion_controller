@@ -13,6 +13,7 @@ idf_component_register(
         esp_timer
         freertos
         json
+        safety_monitor
     EMBED_FILES
         "www/index.html"
 )

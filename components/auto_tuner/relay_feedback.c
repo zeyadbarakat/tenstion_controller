@@ -25,17 +25,14 @@
  * This is based on the describing function of a relay,
  * which approximates the fundamental component of the relay output.
  *
- * Ziegler-Nichols Tuning Rules:
- * ============================
+ * Tuning Rules (applied from Ku and Tu):
+ * ======================================
  *
- * For PI controller:
- *   Kp = 0.45 * Ku
- *   Ki = 1.2 * Kp / Tu = 0.54 * Ku / Tu
- *
- * Alternative rules:
- * - Tyreus-Luyben (more conservative): Kp = 0.31 * Ku
- * - Some overshoot: Kp = 0.33 * Ku
- * - No overshoot: Kp = 0.20 * Ku
+ * For PI controller (default is No Overshoot for safe unwinding):
+ *   Ziegler-Nichols:  Kp = 0.45 * Ku, Ki = 0.54 * Ku / Tu
+ *   Tyreus-Luyben:    Kp = 0.31 * Ku, Ki = Kp / (2.2 * Tu)
+ *   Some overshoot:   Kp = 0.33 * Ku, Ki = Kp / (0.5 * Tu)
+ *   No overshoot:     Kp = 0.20 * Ku, Ki = Kp / (0.5 * Tu)  <-- DEFAULT
  *
  * Peak Detection Algorithm:
  * ========================

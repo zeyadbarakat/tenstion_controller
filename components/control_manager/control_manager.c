@@ -2,28 +2,38 @@
  * @file control_manager.c
  * @brief Central Control Manager Implementation
  *
- * Control Loop Architecture:
- * =========================
+ * Control Loop Architecture (Unwinder):
+ * ====================================
  *
  *     ┌──────────────────────────────────────────────────────────┐
  *     │                    CONTROL MANAGER                       │
  *     ├──────────────────────────────────────────────────────────┤
  *     │                                                          │
- *     │  Tension     ┌──────────┐     Speed      ┌──────────┐    │
- *     │  Setpoint───►│ Tension  ├──────Setpoint─►│  Speed   ├───►│PWM
- *     │              │    PI    │                │    PI    │    │
- *     │          ┌──►│Controller│◄───────────────│Controller│◄─┐ │
- *     │          │   └──────────┘                └──────────┘  │ │
- *     │          │                                             │ │
- *     │       Tension                                       Speed│
- *     │       Feedback                                   Feedback│
- *     │          │                                             │ │
- *     │   ┌──────┴───────┐                           ┌─────────┴┐│
- *     │   │   HX711      │                           │  PCNT    ││
- *     │   │  Load Cell   │                           │ Encoder  ││
- *     │   └──────────────┘                           └──────────┘│
+ *     │  Tension     ┌──────────┐  (negated) ┌──────────┐       │
+ *     │  Setpoint───►│ Tension  ├──(−1)──SP─►│  Speed   ├──────►│PWM
+ *     │              │    PI    │            │    PI    │       │
+ *     │          ┌──►│Controller│◄───────────│Controller│◄────┐ │
+ *     │          │   └──────────┘            └──────────┘     │ │
+ *     │          │                                            │ │
+ *     │       Tension                                      Speed│
+ *     │       Feedback                                  Feedback│
+ *     │          │                                            │ │
+ *     │   ┌──────┴───────┐                          ┌─────────┴┐│
+ *     │   │   HX711      │                          │  PCNT    ││
+ *     │   │  Load Cell   │                          │ Encoder  ││
+ *     │   └──────────────┘                          └──────────┘│
  *     │                                                          │
  *     └──────────────────────────────────────────────────────────┘
+ *
+ * IMPORTANT: Tension PI output is NEGATED because this is an unwinder.
+ * More motor speed = more unwinding = LESS tension (inverse plant).
+ * The negation converts the PI output so that positive speed_setpoint
+ * causes the motor to speed up when tension is too HIGH.
+ *
+ * Features:
+ * - Live hot-reload of PI gains and safety limits via web API
+ * - Auto-detect tuning RPM (motor ramp test)
+ * - No-overshoot tuning rule (Kp = 0.20 × Ku) for safe unwinding
  *
  * FreeRTOS Tasks:
  * ==============
@@ -86,6 +96,10 @@ struct control_manager_s {
   float tension_step; /* Configurable step for ▲/▼ keys */
   system_status_t status;
   int64_t start_time_us;
+
+  // RPM detection state
+  int detect_step;
+  float detect_max_rpm;
 
   // Tasks
   TaskHandle_t control_task;
@@ -598,6 +612,58 @@ void control_manager_start_autotune(control_manager_handle_t handle,
            speed_loop ? "speed" : "tension", cfg.setpoint);
 }
 
+void control_manager_detect_rpm(control_manager_handle_t handle) {
+  if (handle == NULL)
+    return;
+
+  xSemaphoreTake(handle->mutex, portMAX_DELAY);
+  if (handle->mode != MODE_IDLE) {
+    ESP_LOGW(TAG, "Cannot detect RPM - system not idle (mode=%d)",
+             handle->mode);
+    xSemaphoreGive(handle->mutex);
+    return;
+  }
+
+  handle->detect_step = 0;
+  handle->detect_max_rpm = 0.0f;
+  handle->status.detected_rpm = 0;
+  handle->mode = MODE_DETECT_RPM;
+  xSemaphoreGive(handle->mutex);
+
+  ESP_LOGI(TAG, "RPM detection started - ramping motor 0->80%% over 5s");
+}
+
+void control_manager_set_pi_gains(control_manager_handle_t handle,
+                                  float speed_kp, float speed_ki,
+                                  float tension_kp, float tension_ki) {
+  if (handle == NULL)
+    return;
+
+  xSemaphoreTake(handle->mutex, portMAX_DELAY);
+  pi_set_gains(&handle->speed_pi, speed_kp, speed_ki);
+  pi_set_gains(&handle->tension_pi, tension_kp, tension_ki);
+  xSemaphoreGive(handle->mutex);
+
+  ESP_LOGI(TAG, "PI gains updated live: Speed(%.4f,%.4f) Tension(%.4f,%.4f)",
+           speed_kp, speed_ki, tension_kp, tension_ki);
+}
+
+void control_manager_set_safety_limits(control_manager_handle_t handle,
+                                       const safety_limits_t *limits) {
+  if (handle == NULL || limits == NULL)
+    return;
+  safety_set_limits(handle->safety, limits);
+  safety_save_limits(handle->safety);
+  ESP_LOGI(TAG, "Safety limits updated live and saved to NVS");
+}
+
+void control_manager_get_safety_limits(control_manager_handle_t handle,
+                                       safety_limits_t *limits) {
+  if (handle == NULL || limits == NULL)
+    return;
+  safety_get_limits(handle->safety, limits);
+}
+
 void control_manager_jog(control_manager_handle_t handle, float speed_percent) {
   if (handle == NULL)
     return;
@@ -724,8 +790,10 @@ static void run_control_loop(control_manager_handle_t mgr) {
     switch (mgr->mode) {
     case MODE_AUTO_TENSION:
       // Cascaded control: tension PI outputs speed setpoint
+      // NEGATED because this is an UNWINDER: more speed = LESS tension
+      // (motor unwinds roll, releasing wire, reducing tension)
       speed_setpoint =
-          pi_compute(&mgr->tension_pi, mgr->tension_setpoint, tension_kg);
+          -pi_compute(&mgr->tension_pi, mgr->tension_setpoint, tension_kg);
       new_pwm_output = pi_compute(&mgr->speed_pi, speed_setpoint, speed_rpm);
 
       static int log_cnt = 0;
@@ -756,12 +824,51 @@ static void run_control_loop(control_manager_handle_t mgr) {
     case MODE_TUNING_TENSION:
       // Tension loop auto-tune: relay output is SPEED SETPOINT,
       // routed through speed PI inner loop (must stay active!)
+      // NEGATED for unwinder (inverse plant: more speed = less tension)
       if (autotune_is_active(mgr->autotuner)) {
         speed_setpoint =
-            autotune_update(mgr->autotuner, mgr->tension_setpoint, tension_kg);
+            -autotune_update(mgr->autotuner, mgr->tension_setpoint, tension_kg);
         new_pwm_output = pi_compute(&mgr->speed_pi, speed_setpoint, speed_rpm);
       }
       break;
+
+    case MODE_DETECT_RPM: {
+      // Ramp motor from 0% to 80% PWM over 50 ticks (5 seconds at 10Hz)
+      mgr->detect_step++;
+      float ramp_pwm = (mgr->detect_step / 50.0f) * 80.0f;
+      if (ramp_pwm > 80.0f)
+        ramp_pwm = 80.0f;
+      new_pwm_output = ramp_pwm;
+
+      // Track peak RPM
+      if (speed_rpm > mgr->detect_max_rpm) {
+        mgr->detect_max_rpm = speed_rpm;
+      }
+
+      // After 50 ticks (5 seconds): stop and report
+      if (mgr->detect_step >= 50) {
+        new_pwm_output = 0.0f;
+        uint16_t suggested = (uint16_t)(mgr->detect_max_rpm * 0.40f);
+        if (suggested < 10)
+          suggested = 10; // Minimum floor
+        mgr->status.detected_rpm = suggested;
+        mgr->mode = MODE_IDLE;
+
+        // Save to NVS so it persists
+        nvs_handle_t nvs;
+        if (nvs_open("config", NVS_READWRITE, &nvs) == ESP_OK) {
+          nvs_set_u16(nvs, "autotune_speed", suggested);
+          nvs_commit(nvs);
+          nvs_close(nvs);
+        }
+
+        ESP_LOGI(TAG,
+                 "RPM detection complete: peak=%.0f, suggested tune RPM=%u",
+                 mgr->detect_max_rpm, suggested);
+        lcd_show_message(mgr->lcd, "RPM Detected!", 3000);
+      }
+      break;
+    }
 
     default:
       break;

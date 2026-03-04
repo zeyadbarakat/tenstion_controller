@@ -3,14 +3,17 @@
  * @brief Safety Monitor for Tension Control System
  *
  * Monitors and enforces safety limits with fault handling:
- * - Tension limits (max/min with hysteresis)
- * - Speed limits (max/min RPM)
- * - Motor stall detection
- * - Encoder failure detection
+ * - Tension limits (max/min with configurable hysteresis)
+ * - Speed limits (max RPM)
+ * - Motor stall detection (configurable PWM/RPM thresholds)
+ * - Encoder failure detection (configurable PWM threshold)
  * - Load cell disconnect detection
  * - Emergency stop handling
  * - Watchdog integration
  * - Fault logging to NVS
+ *
+ * All safety parameters are configurable via the web UI Safety tab
+ * and persisted to NVS. Changes apply live without system reset.
  */
 
 #ifndef SAFETY_H
@@ -71,6 +74,15 @@ typedef struct {
                             */
   uint32_t stall_timeout_ms;
   uint32_t encoder_timeout_ms;
+
+  // Previously hardcoded constants - now configurable
+  float hysteresis_percent; /**< Over/under tension hysteresis band (%) */
+  float
+      under_tension_floor_kg; /**< Below this, under-tension fault is ignored */
+  uint32_t startup_suppress_ms; /**< Grace period before under-tension faults */
+  float encoder_pwm_threshold;  /**< Min PWM% before expecting encoder pulses */
+  float stall_pwm_threshold;    /**< Min PWM% before considering a stall */
+  float stall_speed_threshold; /**< Speed below this + high PWM = stall (RPM) */
 } safety_limits_t;
 
 /**

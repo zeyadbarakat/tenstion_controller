@@ -495,6 +495,7 @@
         <button class="tab active" data-tab="tuning">Tuning</button>
         <button class="tab" data-tab="calib">Calibration</button>
         <button class="tab" data-tab="logs">Logs</button>
+        <button class="tab" data-tab="safety">Safety</button>
         <button class="tab" data-tab="info">Info</button>
     </div>
     <div class="tab-content">
@@ -552,11 +553,65 @@
                     style="margin-left:8px;">💾</button></div>
             <div class="row"><span class="lbl">Tune RPM:</span><input type="number" id="autotune-speed" value="150"
                     style="width:80px;"><button class="btn-sm btn-gray" onclick="saveAutotuneSpeed()"
-                    style="margin-left:8px;">💾</button></div>
+                    style="margin-left:8px;">💾</button><button class="btn-sm btn-blue" onclick="detectRPM()"
+                    style="margin-left:4px;">🔍 Auto</button></div>
             <div class="row"><span class="lbl">IP:</span><span>192.168.4.1</span></div>
             <div class="row"><button class="btn-sm btn-blue" onclick="cmd(9)">🔄 Reset Faults</button></div>
             <div style="font-size:0.7rem; color:#64748b; margin-top:10px;">
                 <b>⚠️ Watchdog</b> = No hardware response (normal without load cell/encoder connected)
+            </div>
+        </div>
+        <!-- Safety Tab -->
+        <div class="tab-pane" id="tab-safety">
+            <div style="font-size:0.7rem; color:#f59e0b; margin-bottom:10px;">⚠️ Changes apply instantly without reset.
+                Be careful with these values!</div>
+
+            <div style="font-size:0.75rem; color:#60a5fa; margin:8px 0 4px; font-weight:bold;">📊 Fault Limits</div>
+            <div class="row"><span class="lbl">Max Tension:</span><input type="number" id="sf-max-tension" step="0.5"
+                    style="width:70px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">kg — Shuts motor
+                    if exceeded</span></div>
+            <div class="row"><span class="lbl">Min Tension:</span><input type="number" id="sf-min-tension" step="0.1"
+                    style="width:70px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">kg — Under-tension
+                    fault threshold</span></div>
+            <div class="row"><span class="lbl">Max Speed:</span><input type="number" id="sf-max-speed" step="100"
+                    style="width:80px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">RPM — Over-speed
+                    fault</span></div>
+            <div class="row"><span class="lbl">Warning %:</span><input type="number" id="sf-warning" step="1" min="50"
+                    max="99" style="width:60px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">% of
+                    limit → yellow warning</span></div>
+            <div class="row"><span class="lbl">Hysteresis:</span><input type="number" id="sf-hyst" step="1" min="1"
+                    max="20" style="width:60px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">% band to
+                    prevent fault flicker</span></div>
+
+            <div style="font-size:0.75rem; color:#60a5fa; margin:12px 0 4px; font-weight:bold;">⏱️ Timing</div>
+            <div class="row"><span class="lbl">Stall T/O:</span><input type="number" id="sf-stall-to" step="500"
+                    style="width:80px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">ms — Time before
+                    stall fault</span></div>
+            <div class="row"><span class="lbl">Encoder T/O:</span><input type="number" id="sf-enc-to" step="500"
+                    style="width:80px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">ms — No pulses =
+                    encoder fault</span></div>
+            <div class="row"><span class="lbl">Startup Grace:</span><input type="number" id="sf-startup" step="1000"
+                    style="width:80px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">ms — Suppress
+                    under-tension at start</span></div>
+
+            <div style="font-size:0.75rem; color:#60a5fa; margin:12px 0 4px; font-weight:bold;">🔍 Detection Thresholds
+            </div>
+            <div class="row"><span class="lbl">Enc PWM%:</span><input type="number" id="sf-enc-pwm" step="5"
+                    style="width:60px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">% — Below this,
+                    encoder silence is OK</span></div>
+            <div class="row"><span class="lbl">Stall PWM%:</span><input type="number" id="sf-stall-pwm" step="5"
+                    style="width:60px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">% — Below this,
+                    slow speed is OK</span></div>
+            <div class="row"><span class="lbl">Stall RPM:</span><input type="number" id="sf-stall-rpm" step="5"
+                    style="width:60px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">RPM — Below + high
+                    PWM = stall</span></div>
+            <div class="row"><span class="lbl">UT Floor:</span><input type="number" id="sf-ut-floor" step="0.01"
+                    style="width:70px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">kg — Below this =
+                    noise, ignore</span></div>
+
+            <div style="margin-top:10px;">
+                <button class="btn-sm btn-blue" onclick="saveSafety()">💾 Apply Safety Limits</button>
+                <button class="btn-sm btn-gray" onclick="loadSafety()" style="margin-left:6px;">🔄 Reload</button>
             </div>
         </div>
     </div>
@@ -834,6 +889,27 @@
                 else alert('Save failed');
             }).catch(() => alert('Error saving autotune speed'));
         }
+        function detectRPM() {
+            if (!confirm('Auto-detect max RPM? Motor will ramp to 80% for 5 seconds.')) return;
+            fetch('/api/cmd', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cmd: 26, value: 0 })
+            });
+            // Poll status for detected_rpm result
+            const pollId = setInterval(() => {
+                fetch('/api/status').then(r => r.json()).then(d => {
+                    if (d.detected_rpm && d.detected_rpm > 0) {
+                        clearInterval(pollId);
+                        const el = document.getElementById('autotune-speed');
+                        if (el) el.value = d.detected_rpm;
+                        alert('Detected! Suggested tune RPM: ' + d.detected_rpm + '. Press 💾 to save.');
+                    }
+                }).catch(() => { });
+            }, 1000);
+            // Timeout after 10 seconds
+            setTimeout(() => clearInterval(pollId), 10000);
+        }
         function listLogs() {
             document.getElementById('log-list').innerHTML = 'No log files found. CSV logging not yet active.';
             // TODO: Fetch from /api/logs endpoint
@@ -965,6 +1041,48 @@
         document.getElementById('jog-right').onclick = () => jogMove(1);
         document.getElementById('jog-stop-btn').onclick = () => jogStop();
 
+        // Safety config
+        function loadSafety() {
+            fetch('/api/safety').then(r => r.json()).then(d => {
+                document.getElementById('sf-max-tension').value = d.max_tension_kg;
+                document.getElementById('sf-min-tension').value = d.min_tension_kg;
+                document.getElementById('sf-max-speed').value = d.max_speed_rpm;
+                document.getElementById('sf-warning').value = d.warning_threshold;
+                document.getElementById('sf-hyst').value = d.hysteresis_percent;
+                document.getElementById('sf-stall-to').value = d.stall_timeout_ms;
+                document.getElementById('sf-enc-to').value = d.encoder_timeout_ms;
+                document.getElementById('sf-startup').value = d.startup_suppress_ms;
+                document.getElementById('sf-enc-pwm').value = d.encoder_pwm_threshold;
+                document.getElementById('sf-stall-pwm').value = d.stall_pwm_threshold;
+                document.getElementById('sf-stall-rpm').value = d.stall_speed_threshold;
+                document.getElementById('sf-ut-floor').value = d.under_tension_floor_kg;
+            }).catch(e => console.log('Safety load error:', e));
+        }
+        function saveSafety() {
+            const data = {
+                max_tension_kg: parseFloat(document.getElementById('sf-max-tension').value),
+                min_tension_kg: parseFloat(document.getElementById('sf-min-tension').value),
+                max_speed_rpm: parseFloat(document.getElementById('sf-max-speed').value),
+                warning_threshold: parseFloat(document.getElementById('sf-warning').value),
+                hysteresis_percent: parseFloat(document.getElementById('sf-hyst').value),
+                stall_timeout_ms: parseInt(document.getElementById('sf-stall-to').value),
+                encoder_timeout_ms: parseInt(document.getElementById('sf-enc-to').value),
+                startup_suppress_ms: parseInt(document.getElementById('sf-startup').value),
+                encoder_pwm_threshold: parseFloat(document.getElementById('sf-enc-pwm').value),
+                stall_pwm_threshold: parseFloat(document.getElementById('sf-stall-pwm').value),
+                stall_speed_threshold: parseFloat(document.getElementById('sf-stall-rpm').value),
+                under_tension_floor_kg: parseFloat(document.getElementById('sf-ut-floor').value)
+            };
+            fetch('/api/safety', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            }).then(r => r.json()).then(d => {
+                if (d.status === 'ok') alert('Safety limits applied live!');
+                else alert('Save failed');
+            }).catch(() => alert('Error saving safety limits'));
+        }
+
         // Control buttons
         document.getElementById('btn-start').onclick = () => cmd(0);
         document.getElementById('btn-stop').onclick = () => cmd(1);
@@ -982,6 +1100,7 @@
 
         // Start WebSocket connection and load config
         loadConfig();
+        loadSafety();
         poll();  // Initial data fetch via HTTP
         connectWebSocket();  // Try WebSocket for real-time updates
 

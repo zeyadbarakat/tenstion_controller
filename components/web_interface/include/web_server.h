@@ -26,6 +26,7 @@ typedef struct {
   uint16_t fault_flags;
   bool calibrated;
   uint32_t uptime_seconds;
+  uint16_t detected_rpm;
 } web_status_data_t;
 
 typedef enum {
@@ -46,7 +47,10 @@ typedef enum {
   WEB_CMD_SET_EMA_ALPHA = 22,  // value: alpha * 100 (1-100)
   WEB_CMD_SET_MA_WINDOW = 23,  // value: window size (1-50)
   WEB_CMD_SET_CAL_OFFSET = 24, // value: offset (int32)
-  WEB_CMD_SET_CAL_SCALE = 25   // value: scale (float)
+  WEB_CMD_SET_CAL_SCALE = 25,  // value: scale (float)
+  WEB_CMD_DETECT_RPM = 26,     // auto-detect tuning RPM
+  WEB_CMD_SET_PI_GAINS = 27,   // live-update PI gains (value unused)
+  WEB_CMD_SET_SAFETY = 28      // live-update safety limits
 } web_command_t;
 
 typedef void (*web_command_callback_t)(web_command_t cmd, float value,

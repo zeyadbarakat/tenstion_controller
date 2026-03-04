@@ -5,7 +5,9 @@
  * Orchestrates all components:
  * - Hardware drivers (encoder, load cell, motor)
  * - Control algorithms (PI controllers, auto-tuner)
- * - Safety monitoring
+ * - Unwinder sign inversion (more speed = less tension)
+ * - Safety monitoring with live-configurable limits
+ * - Live hot-reload of PI gains and safety parameters
  * - User interfaces (buttons, LCD)
  * - Data logging
  */
@@ -14,6 +16,7 @@
 #define CONTROL_MANAGER_H
 
 #include "esp_err.h"
+#include "safety.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -33,7 +36,8 @@ typedef enum {
   MODE_AUTO_TENSION,   /**< Automatic tension control */
   MODE_TUNING_SPEED,   /**< Auto-tuning speed loop */
   MODE_TUNING_TENSION, /**< Auto-tuning tension loop */
-  MODE_CALIBRATING     /**< Load cell calibration */
+  MODE_CALIBRATING,    /**< Load cell calibration */
+  MODE_DETECT_RPM      /**< Auto-detect max RPM for tuning setpoint */
 } control_mode_t;
 
 /**
@@ -62,6 +66,7 @@ typedef struct {
   bool calibrated;
   bool tuned;
   uint32_t uptime_seconds;
+  uint16_t detected_rpm; /**< Result of auto-detect RPM (0 = not available) */
 } system_status_t;
 
 /**
@@ -218,6 +223,41 @@ void control_manager_start_calibration(control_manager_handle_t handle,
  */
 void control_manager_start_autotune(control_manager_handle_t handle,
                                     bool speed_loop);
+
+/**
+ * @brief Start auto-detect max RPM
+ *
+ * Ramps motor 0->80% PWM over 5 seconds, records peak RPM,
+ * and suggests 40% of peak as the tuning RPM.
+ *
+ * @param[in] handle    Control manager handle
+ */
+void control_manager_detect_rpm(control_manager_handle_t handle);
+
+/**
+ * @brief Set PI gains at runtime (live hot-reload)
+ *
+ * @param[in] handle    Control manager handle
+ * @param[in] speed_kp  Speed loop Kp
+ * @param[in] speed_ki  Speed loop Ki
+ * @param[in] tension_kp Tension loop Kp
+ * @param[in] tension_ki Tension loop Ki
+ */
+void control_manager_set_pi_gains(control_manager_handle_t handle,
+                                  float speed_kp, float speed_ki,
+                                  float tension_kp, float tension_ki);
+
+/**
+ * @brief Set safety limits at runtime (live hot-reload)
+ */
+void control_manager_set_safety_limits(control_manager_handle_t handle,
+                                       const safety_limits_t *limits);
+
+/**
+ * @brief Get current safety limits
+ */
+void control_manager_get_safety_limits(control_manager_handle_t handle,
+                                       safety_limits_t *limits);
 
 /**
  * @brief Manual jog motor
