@@ -67,6 +67,7 @@ typedef struct {
   bool tuned;
   uint32_t uptime_seconds;
   uint16_t detected_rpm; /**< Result of auto-detect RPM (0 = not available) */
+  int32_t raw_adc;       /**< Last filtered raw ADC count from load cell */
 } system_status_t;
 
 /**
@@ -233,6 +234,14 @@ void control_manager_start_autotune(control_manager_handle_t handle,
  * @param[in] handle    Control manager handle
  */
 void control_manager_detect_rpm(control_manager_handle_t handle);
+
+/**
+ * @brief Set encoder PPR at runtime (live hot-reload)
+ *
+ * @param[in] handle    Control manager handle
+ * @param[in] ppr       Pulses per revolution
+ */
+void control_manager_set_ppr(control_manager_handle_t handle, uint16_t ppr);
 
 /**
  * @brief Set PI gains at runtime (live hot-reload)

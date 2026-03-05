@@ -350,6 +350,7 @@ float hx711_update(hx711_handle_t handle) {
 
   // Apply moving average on raw values
   int32_t filtered = hx711_moving_average(handle, raw);
+  handle->raw_value = filtered; // Store for external access
 
   // Calculate instantaneous weight
   float instant_weight;
@@ -777,4 +778,10 @@ void hx711_set_filter_size(hx711_handle_t handle, uint8_t size) {
   xSemaphoreGive(handle->mutex);
 
   ESP_LOGI(TAG, "Filter size set to %d", size);
+}
+
+int32_t hx711_get_raw_value(hx711_handle_t handle) {
+  if (handle == NULL)
+    return 0;
+  return handle->raw_value;
 }

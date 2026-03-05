@@ -50,7 +50,8 @@ typedef enum {
   WEB_CMD_SET_CAL_SCALE = 25,  // value: scale (float)
   WEB_CMD_DETECT_RPM = 26,     // auto-detect tuning RPM
   WEB_CMD_SET_PI_GAINS = 27,   // live-update PI gains (value unused)
-  WEB_CMD_SET_SAFETY = 28      // live-update safety limits
+  WEB_CMD_SET_SAFETY = 28,     // live-update safety limits
+  WEB_CMD_SET_PPR = 29         // live-update encoder PPR
 } web_command_t;
 
 typedef void (*web_command_callback_t)(web_command_t cmd, float value,

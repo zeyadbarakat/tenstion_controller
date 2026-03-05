@@ -173,7 +173,7 @@ static web_server_handle_t g_web_srv = NULL;
 
 // WebSocket broadcast task - pushes sensor data at 50Hz
 static void ws_broadcast_task(void *param) {
-  char json_buf[256];
+  char json_buf[320];
   TickType_t last_wake = xTaskGetTickCount();
 
   ESP_LOGI(TAG, "WebSocket broadcast task started (50Hz)");
@@ -190,11 +190,11 @@ static void ws_broadcast_task(void *param) {
           "{\"tension\":%.2f,\"tensionSP\":%.1f,\"speed\":%.0f,\"speedSP\":%."
           "0f,"
           "\"pwm\":%.1f,\"state\":%d,\"mode\":%d,\"faults\":%d,\"cal\":%d,"
-          "\"uptime\":%lu}",
+          "\"uptime\":%lu,\"rawAdc\":%ld}",
           status.tension_kg, status.tension_setpoint, status.speed_rpm,
           status.speed_setpoint, status.pwm_percent, status.system_state,
           status.mode, status.fault_flags, status.calibrated ? 1 : 0,
-          (unsigned long)status.uptime_seconds);
+          (unsigned long)status.uptime_seconds, (long)status.raw_adc);
 
       // Broadcast to all WebSocket clients
       web_server_ws_broadcast(g_web_srv, json_buf);
@@ -307,6 +307,9 @@ static void web_command_cb(web_command_t cmd, float value, void *user_data) {
     control_manager_set_safety_limits(g_ctrl_mgr, &limits);
     break;
   }
+  case WEB_CMD_SET_PPR:
+    control_manager_set_ppr(g_ctrl_mgr, (uint16_t)value);
+    break;
   default:
     break;
   }

@@ -181,6 +181,38 @@ Use `idf.py menuconfig` → **"Tension Controller Configuration"** to set:
 
 The user only sets **tension**. The tension PI controller automatically calculates the required motor speed (speed setpoint), and the speed PI controller drives the motor PWM. As the roll diameter decreases during unwinding, the motor automatically speeds up to maintain constant tension.
 
+
+
+---
+
+## Safety & Fault Limits
+
+To accommodate dynamically changing tension setpoints, the safety monitor tracks over and under tension as a **Percentage of the Setpoint**, rather than fixed absolute values. 
+
+You can configure these limits instantly on-the-fly via the Web Interface (Safety Tab).
+
+### Limit Definitions
+* **Max Tension %**: Shuts down the system if tension rises above this percentage of the setpoint.
+* **Min Tension %**: The threshold for detecting a broken wire or slipping spool.
+* **Hysteresis %**: A small buffer band to prevent rapid fault flickering if the sensor hovers exactly on the fault line.
+* **Warning %**: At this percentage of the limit, the UI turns yellow but the motor keeps running.
+
+### Timing & Grace Periods
+* **Under-Tension T/O (Timeout)**: The tension must remain below the minimum threshold for this many milliseconds before dropping the motor. This prevents false alarms from short wire bounces/slacks.
+* **Startup Grace**: When the system starts, tension is 0. Under-Tension faults are completely ignored for this duration (e.g., 8000ms) to allow the motor time to reel in slack and build operating tension.
+* **Stall T/O**: Maximum allowed time running below the stall speed threshold while PWM output is high. 
+* **Encoder T/O**: If the motor is being driven with high PWM but no encoder pulses are received within this period, an encoder failure fault is triggered.
+
+### Practical Example
+
+If your **Setpoint is 5.0 kg**:
+1. You set **Max Tension to 150%**: Over-Tension triggers at `7.5 kg`.
+2. You set **Min Tension to 50%**: The Under-Tension limit is `2.5 kg`.
+3. You set **Hysteresis to 5%**: The actual fault trigger for min tension occurs at `2.37 kg`. 
+4. You set **Under-Tension T/O to 2000ms**:
+   * If tension drops to `2.0 kg` for 1 second, then bounces back to `3.0 kg`, the system **keeps running**.
+   * If tension drops to `2.0 kg` and stays there for 2 full seconds, the system faults and shuts down the motor to prevent unspooling.
+
 ---
 
 ## Usage

@@ -514,11 +514,25 @@
         </div>
         <!-- Calibration Tab -->
         <div class="tab-pane" id="tab-calib">
-            <div class="row"><span class="lbl">Raw ADC:</span><span id="raw-adc">--</span></div>
-            <div class="row"><span class="lbl">Scale (units/kg):</span><input type="number" id="cal-scale" step="0.1"
-                    value="1"></div>
-            <div class="row"><button class="btn-sm btn-blue" onclick="cmd(5)">⚖️ Tare (Zero)</button><button
-                    class="btn-sm btn-gray" onclick="saveCalib()">💾 Save Scale</button></div>
+            <div style="font-size:0.8rem; color:#94a3b8; margin-bottom:6px; font-weight:600;">📐 Auto-Calibrate
+            </div>
+            <div style="font-size:0.65rem; color:#64748b; margin-bottom:8px;">
+                1. Press ⚖️ Tare with NO weight on sensor & wait 2s<br>
+                2. Place a known weight on the sensor<br>
+                3. Enter the weight below and press Calibrate
+            </div>
+            <div class="row">
+                <button class="btn-sm btn-blue" onclick="cmd(5)" style="margin-bottom:10px; width:100%;">⚖️ Tare
+                    (Zero)</button>
+            </div>
+            <div class="row">
+                <span class="lbl">Known Weight (kg):</span>
+                <input type="number" id="cal-known-weight" step="0.1" min="0.1" value="1.0" style="flex:1;">
+            </div>
+            <div class="row">
+                <button class="btn-sm btn-blue" onclick="calibrateScale()" style="width:100%;">📐
+                    Auto-Calibrate</button>
+            </div>
             <div style="border-top:1px solid #374151; margin:10px 0; padding-top:10px;">
                 <div style="font-size:0.8rem; color:#94a3b8; margin-bottom:6px; font-weight:600;">🔧 Filter Settings
                 </div>
@@ -567,12 +581,12 @@
                 Be careful with these values!</div>
 
             <div style="font-size:0.75rem; color:#60a5fa; margin:8px 0 4px; font-weight:bold;">📊 Fault Limits</div>
-            <div class="row"><span class="lbl">Max Tension:</span><input type="number" id="sf-max-tension" step="0.5"
-                    style="width:70px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">kg — Shuts motor
-                    if exceeded</span></div>
-            <div class="row"><span class="lbl">Min Tension:</span><input type="number" id="sf-min-tension" step="0.1"
-                    style="width:70px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">kg — Under-tension
-                    fault threshold</span></div>
+            <div class="row"><span class="lbl">Max Tension:</span><input type="number" id="sf-max-tension" step="5"
+                    style="width:70px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">% of
+                    Setpoint</span></div>
+            <div class="row"><span class="lbl">Min Tension:</span><input type="number" id="sf-min-tension" step="5"
+                    style="width:70px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">% of
+                    Setpoint</span></div>
             <div class="row"><span class="lbl">Max Speed:</span><input type="number" id="sf-max-speed" step="100"
                     style="width:80px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">RPM — Over-speed
                     fault</span></div>
@@ -584,6 +598,9 @@
                     prevent fault flicker</span></div>
 
             <div style="font-size:0.75rem; color:#60a5fa; margin:12px 0 4px; font-weight:bold;">⏱️ Timing</div>
+            <div class="row"><span class="lbl">Under-Tension T/O:</span><input type="number" id="sf-ut-to" step="500"
+                    style="width:80px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">ms — Time below
+                    Min Tension</span></div>
             <div class="row"><span class="lbl">Stall T/O:</span><input type="number" id="sf-stall-to" step="500"
                     style="width:80px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">ms — Time before
                     stall fault</span></div>
@@ -841,16 +858,15 @@
                 else alert('Save failed');
             }).catch(() => alert('Error saving PPR'));
         }
-        function saveCalib() {
-            const scale = parseFloat(document.getElementById('cal-scale').value);
-            fetch('/api/config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cal_scale: scale })
-            }).then(r => r.json()).then(d => {
-                if (d.saved) alert('Scale saved! (Offset is set by Tare)');
-                else alert('Save failed');
-            }).catch(() => alert('Error saving calibration'));
+        function calibrateScale() {
+            const weight = parseFloat(document.getElementById('cal-known-weight').value);
+            if (isNaN(weight) || weight <= 0) {
+                alert('Please enter a valid weight greater than 0 kg');
+                return;
+            }
+            if (!confirm('Place ' + weight + ' kg on the sensor, then click OK.\n\nMake sure you have already pressed Tare with NO weight first!')) return;
+            cmd(6, weight);
+            alert('Calibrating... The scale will be calculated automatically.\nRefresh the page after a few seconds to see the updated scale value.');
         }
         function saveFilter() {
             const alpha = parseInt(document.getElementById('ema-slider').value);
@@ -891,7 +907,7 @@
         }
         function detectRPM() {
             if (!confirm('Auto-detect max RPM? Motor will ramp to 80% for 5 seconds.')) return;
-            fetch('/api/cmd', {
+            fetch('/api/command', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ cmd: 26, value: 0 })
@@ -918,8 +934,6 @@
             fetch('/api/config').then(r => r.json()).then(cfg => {
                 const elPpr = document.getElementById('ppr');
                 const elAutoSp = document.getElementById('autotune-speed');
-                const elCalO = document.getElementById('cal-offset');
-                const elCalS = document.getElementById('cal-scale');
                 const elSKp = document.getElementById('speed-kp');
                 const elSKi = document.getElementById('speed-ki');
                 const elTKp = document.getElementById('tension-kp');
@@ -927,8 +941,6 @@
 
                 if (cfg.ppr && elPpr) elPpr.value = cfg.ppr;
                 if (cfg.autotune_speed && elAutoSp) elAutoSp.value = cfg.autotune_speed;
-                if (cfg.cal_offset !== undefined && elCalO) elCalO.value = cfg.cal_offset;
-                if (cfg.cal_scale !== undefined && elCalS) elCalS.value = parseFloat(cfg.cal_scale).toFixed(6);
                 if (cfg.speed_kp !== undefined && elSKp) elSKp.value = parseFloat(cfg.speed_kp).toFixed(2);
                 if (cfg.speed_ki !== undefined && elSKi) elSKi.value = parseFloat(cfg.speed_ki).toFixed(2);
                 if (cfg.tension_kp !== undefined && elTKp) elTKp.value = parseFloat(cfg.tension_kp).toFixed(2);
@@ -1044,11 +1056,12 @@
         // Safety config
         function loadSafety() {
             fetch('/api/safety').then(r => r.json()).then(d => {
-                document.getElementById('sf-max-tension').value = d.max_tension_kg;
-                document.getElementById('sf-min-tension').value = d.min_tension_kg;
+                document.getElementById('sf-max-tension').value = d.max_tension_percent;
+                document.getElementById('sf-min-tension').value = d.min_tension_percent;
                 document.getElementById('sf-max-speed').value = d.max_speed_rpm;
                 document.getElementById('sf-warning').value = d.warning_threshold;
                 document.getElementById('sf-hyst').value = d.hysteresis_percent;
+                document.getElementById('sf-ut-to').value = d.under_tension_timeout_ms;
                 document.getElementById('sf-stall-to').value = d.stall_timeout_ms;
                 document.getElementById('sf-enc-to').value = d.encoder_timeout_ms;
                 document.getElementById('sf-startup').value = d.startup_suppress_ms;
@@ -1060,11 +1073,12 @@
         }
         function saveSafety() {
             const data = {
-                max_tension_kg: parseFloat(document.getElementById('sf-max-tension').value),
-                min_tension_kg: parseFloat(document.getElementById('sf-min-tension').value),
+                max_tension_percent: parseFloat(document.getElementById('sf-max-tension').value),
+                min_tension_percent: parseFloat(document.getElementById('sf-min-tension').value),
                 max_speed_rpm: parseFloat(document.getElementById('sf-max-speed').value),
                 warning_threshold: parseFloat(document.getElementById('sf-warning').value),
                 hysteresis_percent: parseFloat(document.getElementById('sf-hyst').value),
+                under_tension_timeout_ms: parseInt(document.getElementById('sf-ut-to').value),
                 stall_timeout_ms: parseInt(document.getElementById('sf-stall-to').value),
                 encoder_timeout_ms: parseInt(document.getElementById('sf-enc-to').value),
                 startup_suppress_ms: parseInt(document.getElementById('sf-startup').value),

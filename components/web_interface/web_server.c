@@ -317,6 +317,8 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
     uint16_t ppr = 600;
     int32_t cal_offset = 0;
     int32_t cal_scale_x1000 = 1000; // 0.001 * 1000000
+    float cal_scale_final = 0.001f; // final float value for JSON output
+    bool scale_from_loadcell = false;
     int32_t speed_kp_x = 5000;
     int32_t speed_ki_x = 1000;
     int32_t tension_kp_x = 2000;
@@ -326,6 +328,45 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
     nvs_get_u16(nvs, "ppr", &ppr);
     nvs_get_i32(nvs, "cal_offset", &cal_offset);
     nvs_get_i32(nvs, "cal_scale", &cal_scale_x1000);
+
+    // Fallback: read from "loadcell" namespace (where tare/calibrate
+    // actually save). The HX711 driver stores offset as int32 and scale
+    // as a float blob under the "loadcell" NVS namespace.
+    {
+      nvs_handle_t nvs_lc;
+      if (nvs_open("loadcell", NVS_READONLY, &nvs_lc) == ESP_OK) {
+        // Offset fallback: if config has 0 but loadcell has a real value
+        if (cal_offset == 0) {
+          int32_t lc_offset = 0;
+          if (nvs_get_i32(nvs_lc, "offset", &lc_offset) == ESP_OK &&
+              lc_offset != 0) {
+            cal_offset = lc_offset;
+            ESP_LOGI(TAG, "cal_offset fallback from loadcell: %ld",
+                     (long)cal_offset);
+          }
+        }
+        // Scale fallback: if config has default but loadcell has a real
+        // float. The loadcell stores scale as raw counts/kg (e.g. 50000),
+        // not the x1000000 encoding used by the config namespace.
+        if (cal_scale_x1000 == 1000) { // still at default 0.001
+          float lc_scale = 0.0f;
+          size_t sz = sizeof(float);
+          if (nvs_get_blob(nvs_lc, "scale", &lc_scale, &sz) == ESP_OK &&
+              lc_scale != 0.0f && lc_scale != 1.0f) {
+            cal_scale_final = lc_scale;
+            scale_from_loadcell = true;
+            ESP_LOGI(TAG, "cal_scale fallback from loadcell: %.6f", lc_scale);
+          }
+        }
+        nvs_close(nvs_lc);
+      }
+    }
+
+    // If scale wasn't overridden by loadcell, convert from config encoding
+    if (!scale_from_loadcell) {
+      cal_scale_final = (float)cal_scale_x1000 / 1000000.0f;
+    }
+
     nvs_get_i32(nvs, "speed_kp", &speed_kp_x);
     nvs_get_i32(nvs, "speed_ki", &speed_ki_x);
     nvs_get_i32(nvs, "tension_kp", &tension_kp_x);
@@ -345,8 +386,7 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
 
     cJSON_AddNumberToObject(root, "ppr", ppr);
     cJSON_AddNumberToObject(root, "cal_offset", cal_offset);
-    cJSON_AddNumberToObject(root, "cal_scale",
-                            (float)cal_scale_x1000 / 1000000.0f);
+    cJSON_AddNumberToObject(root, "cal_scale", cal_scale_final);
     cJSON_AddNumberToObject(root, "speed_kp", (float)speed_kp_x / 10000.0f);
     cJSON_AddNumberToObject(root, "speed_ki", (float)speed_ki_x / 10000.0f);
     cJSON_AddNumberToObject(root, "tension_kp", (float)tension_kp_x / 10000.0f);
@@ -412,6 +452,12 @@ static esp_err_t api_config_post_handler(httpd_req_t *req) {
   if ((item = cJSON_GetObjectItem(root, "ppr")) != NULL) {
     nvs_set_u16(nvs, "ppr", (uint16_t)item->valueint);
     ESP_LOGI(TAG, "Saved PPR: %d", item->valueint);
+    // Apply PPR immediately without reset
+    struct web_server_s *srv = (struct web_server_s *)req->user_ctx;
+    if (srv && srv->cmd_callback) {
+      srv->cmd_callback(WEB_CMD_SET_PPR, (float)item->valueint,
+                        srv->cmd_user_data);
+    }
   }
   if ((item = cJSON_GetObjectItem(root, "autotune_speed")) != NULL) {
     nvs_set_u16(nvs, "autotune_speed", (uint16_t)item->valueint);
@@ -511,14 +557,18 @@ static esp_err_t api_safety_get_handler(httpd_req_t *req) {
   }
 
   cJSON *root = cJSON_CreateObject();
-  cJSON_AddNumberToObject(root, "max_tension_kg", limits.max_tension_kg);
-  cJSON_AddNumberToObject(root, "min_tension_kg", limits.min_tension_kg);
+  cJSON_AddNumberToObject(root, "max_tension_percent",
+                          limits.max_tension_percent * 100.0f);
+  cJSON_AddNumberToObject(root, "min_tension_percent",
+                          limits.min_tension_percent * 100.0f);
   cJSON_AddNumberToObject(root, "max_speed_rpm", limits.max_speed_rpm);
   cJSON_AddNumberToObject(root, "warning_threshold",
                           limits.warning_threshold * 100.0f);
   cJSON_AddNumberToObject(root, "stall_timeout_ms", limits.stall_timeout_ms);
   cJSON_AddNumberToObject(root, "encoder_timeout_ms",
                           limits.encoder_timeout_ms);
+  cJSON_AddNumberToObject(root, "under_tension_timeout_ms",
+                          limits.under_tension_timeout_ms);
   cJSON_AddNumberToObject(root, "hysteresis_percent",
                           limits.hysteresis_percent);
   cJSON_AddNumberToObject(root, "under_tension_floor_kg",
@@ -566,10 +616,12 @@ static esp_err_t api_safety_post_handler(httpd_req_t *req) {
 
   // Update from JSON
   cJSON *item;
-  if ((item = cJSON_GetObjectItem(root, "max_tension_kg")))
-    limits.max_tension_kg = (float)item->valuedouble;
-  if ((item = cJSON_GetObjectItem(root, "min_tension_kg")))
-    limits.min_tension_kg = (float)item->valuedouble;
+  if ((item = cJSON_GetObjectItem(root, "max_tension_percent")))
+    limits.max_tension_percent = (float)item->valuedouble / 100.0f;
+  if ((item = cJSON_GetObjectItem(root, "min_tension_percent")))
+    limits.min_tension_percent = (float)item->valuedouble / 100.0f;
+  if ((item = cJSON_GetObjectItem(root, "under_tension_timeout_ms")))
+    limits.under_tension_timeout_ms = (uint32_t)item->valuedouble;
   if ((item = cJSON_GetObjectItem(root, "max_speed_rpm")))
     limits.max_speed_rpm = (float)item->valuedouble;
   if ((item = cJSON_GetObjectItem(root, "warning_threshold")))

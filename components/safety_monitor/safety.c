@@ -17,6 +17,8 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *TAG = "safety";
@@ -43,8 +45,10 @@ struct safety_s {
   int64_t last_encoder_pulse_us;
   int64_t stall_start_us;
   int64_t watchdog_last_feed_us;
-  int64_t state_entered_us; // Time when state was changed
+  int64_t state_entered_us;       // Time when state was changed
+  int64_t under_tension_start_us; // Time when under-tension condition started
   bool in_stall_condition;
+  bool in_under_tension_condition;
 
   // Fault tracking
   uint32_t fault_count;
@@ -72,10 +76,10 @@ static bool check_limits_ok(safety_handle_t handle,
 
 safety_limits_t safety_get_default_limits(void) {
   safety_limits_t limits = {
-      .max_tension_kg = 10.0f,
-      .min_tension_kg = 0.5f,
+      .max_tension_percent = 1.50f, // 150% of setpoint
+      .min_tension_percent = 0.50f, // 50% of setpoint
+      .under_tension_timeout_ms = 2000,
       .max_speed_rpm = 2000.0f,
-      .min_speed_rpm = 0.0f,
       .warning_threshold = 0.9f,
       .stall_timeout_ms = 2000,
       .encoder_timeout_ms = 2000,
@@ -183,35 +187,45 @@ system_state_t safety_check(safety_handle_t handle,
   if (handle->state == SYSTEM_STATE_RUNNING ||
       handle->state == SYSTEM_STATE_WARNING) {
     // Tension limits
-    float dynamic_min_tension = handle->limits.min_tension_kg;
-    // Scale down the minimum tension limit if the setpoint is exceptionally low
-    if (readings->setpoint_kg > 0.0f && readings->setpoint_kg < 2.0f) {
-      dynamic_min_tension = readings->setpoint_kg * 0.20f; // 20% of setpoint
-    }
+    // Calculate absolute bounds based on setpoint and percentage limits
+    float dynamic_min_tension =
+        readings->setpoint_kg * handle->limits.min_tension_percent;
+    float max_absolute_tension =
+        readings->setpoint_kg * handle->limits.max_tension_percent;
 
-    float max_with_hyst = handle->limits.max_tension_kg *
+    float max_with_hyst = max_absolute_tension *
                           (1.0f + handle->limits.hysteresis_percent / 100.0f);
     float min_with_hyst = dynamic_min_tension *
                           (1.0f - handle->limits.hysteresis_percent / 100.0f);
 
     if (readings->tension_kg > max_with_hyst) {
       set_fault(handle, FAULT_OVER_TENSION);
-    } else if (readings->tension_kg < handle->limits.max_tension_kg) {
+    } else if (readings->tension_kg < max_absolute_tension) {
       clear_fault(handle, FAULT_OVER_TENSION);
     }
 
     // Calculate time since entering RUNNING state
     int64_t running_time_ms = (now - handle->state_entered_us) / 1000;
 
-    // Suppress under-tension faults during the first 8 seconds of RUNNING
+    // Suppress under-tension faults during the first N seconds of RUNNING
     // to allow the machine to build initial tension from a slack state.
-    if (readings->tension_kg < min_with_hyst &&
-        readings->tension_kg > handle->limits.under_tension_floor_kg) {
-      if (running_time_ms > (int64_t)handle->limits.startup_suppress_ms) {
-        set_fault(handle, FAULT_UNDER_TENSION);
+    if (running_time_ms > (int64_t)handle->limits.startup_suppress_ms) {
+      if (readings->tension_kg < min_with_hyst &&
+          readings->tension_kg > handle->limits.under_tension_floor_kg) {
+
+        if (!handle->in_under_tension_condition) {
+          handle->under_tension_start_us = now;
+          handle->in_under_tension_condition = true;
+        } else if ((now - handle->under_tension_start_us) / 1000 >
+                   handle->limits.under_tension_timeout_ms) {
+          set_fault(handle, FAULT_UNDER_TENSION);
+        }
+      } else if (readings->tension_kg > dynamic_min_tension) {
+        handle->in_under_tension_condition = false;
+        clear_fault(handle, FAULT_UNDER_TENSION);
       }
-    } else if (readings->tension_kg > dynamic_min_tension) {
-      clear_fault(handle, FAULT_UNDER_TENSION);
+    } else {
+      handle->in_under_tension_condition = false;
     }
 
     // Speed limits
@@ -237,8 +251,12 @@ system_state_t safety_check(safety_handle_t handle,
     }
 
     // Check for warning conditions
-    float tension_percent =
-        readings->tension_kg / handle->limits.max_tension_kg;
+    float tension_percent = 0.0f;
+    if (readings->setpoint_kg > 0.0f) {
+      tension_percent =
+          readings->tension_kg /
+          (readings->setpoint_kg * handle->limits.max_tension_percent);
+    }
     float speed_percent =
         fabsf(readings->speed_rpm) / handle->limits.max_speed_rpm;
 
@@ -287,9 +305,9 @@ esp_err_t safety_set_limits(safety_handle_t handle,
   xSemaphoreGive(handle->mutex);
 
   ESP_LOGI(TAG,
-           "Safety limits updated: tension=%.1f-%.1f kg, speed=%.0f-%.0f rpm",
-           limits->min_tension_kg, limits->max_tension_kg,
-           limits->min_speed_rpm, limits->max_speed_rpm);
+           "Safety limits updated: tension=%.0f%%-%.0f%%, max_speed=%.0f rpm",
+           limits->min_tension_percent * 100.0f,
+           limits->max_tension_percent * 100.0f, limits->max_speed_rpm);
 
   return ESP_OK;
 }

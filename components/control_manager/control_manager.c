@@ -296,7 +296,7 @@ esp_err_t control_manager_init(control_manager_handle_t *handle,
         nvs_get_i32(nvs, "speed_ki", &speed_ki_x) == ESP_OK) {
       float skp = (float)speed_kp_x / 10000.0f;
       float ski = (float)speed_ki_x / 10000.0f;
-      if (skp > 0.0001f && skp < 100.0f && ski > 0.00001f && ski < 50.0f) {
+      if (skp > 0.0001f && skp < 1000.0f && ski >= 0.0f && ski < 1000.0f) {
         pi_set_gains(&mgr->speed_pi, skp, ski);
         ESP_LOGI(TAG, "Restored speed PI from NVS: Kp=%.4f Ki=%.4f", skp, ski);
       }
@@ -306,7 +306,7 @@ esp_err_t control_manager_init(control_manager_handle_t *handle,
         nvs_get_i32(nvs, "tension_ki", &tension_ki_x) == ESP_OK) {
       float tkp = (float)tension_kp_x / 10000.0f;
       float tki = (float)tension_ki_x / 10000.0f;
-      if (tkp > 0.0001f && tkp < 100.0f && tki > 0.00001f && tki < 50.0f) {
+      if (tkp > 0.0001f && tkp < 10000.0f && tki >= 0.0f && tki < 10000.0f) {
         pi_set_gains(&mgr->tension_pi, tkp, tki);
         ESP_LOGI(TAG, "Restored tension PI from NVS: Kp=%.4f Ki=%.4f", tkp,
                  tki);
@@ -633,6 +633,13 @@ void control_manager_detect_rpm(control_manager_handle_t handle) {
   ESP_LOGI(TAG, "RPM detection started - ramping motor 0->80%% over 5s");
 }
 
+void control_manager_set_ppr(control_manager_handle_t handle, uint16_t ppr) {
+  if (handle == NULL || ppr == 0)
+    return;
+  encoder_set_ppr(handle->encoder, ppr);
+  ESP_LOGI(TAG, "PPR live-updated to %u", ppr);
+}
+
 void control_manager_set_pi_gains(control_manager_handle_t handle,
                                   float speed_kp, float speed_ki,
                                   float tension_kp, float tension_ki) {
@@ -777,6 +784,22 @@ static void run_control_loop(control_manager_handle_t mgr) {
       .estop_active = buttons_is_estop_active(mgr->buttons),
   };
 
+  // Suppress irrelevant safety faults during tuning/detect modes:
+  // - Speed tuning only exercises the speed loop → suppress tension faults
+  // - RPM detection is a motor ramp test → suppress tension + speed faults
+  // - Tension tuning exercises tension at a fixed speed → suppress speed faults
+  if (mgr->mode == MODE_TUNING_SPEED) {
+    // Report tension at setpoint so under/over-tension faults don't fire
+    readings.tension_kg = readings.setpoint_kg;
+  } else if (mgr->mode == MODE_DETECT_RPM) {
+    // Suppress both tension and speed faults
+    readings.tension_kg = readings.setpoint_kg;
+    readings.speed_rpm = 0.0f; // Don't trigger over-speed
+  } else if (mgr->mode == MODE_TUNING_TENSION) {
+    // Suppress speed faults (relay drives motor to specific speeds)
+    readings.speed_rpm = 0.0f;
+  }
+
   system_state_t state = safety_check(mgr->safety, &readings);
 
   // === Control Output ===
@@ -786,7 +809,12 @@ static void run_control_loop(control_manager_handle_t mgr) {
 
   xSemaphoreTake(mgr->mutex, portMAX_DELAY);
 
-  if (state == SYSTEM_STATE_RUNNING || state == SYSTEM_STATE_WARNING) {
+  if (state == SYSTEM_STATE_RUNNING || state == SYSTEM_STATE_WARNING ||
+      // Allow detect/tune modes to run even from IDLE — they are triggered
+      // independently from the web UI and don't require the RUN button.
+      ((state == SYSTEM_STATE_IDLE || state == SYSTEM_STATE_STARTING) &&
+       (mgr->mode == MODE_DETECT_RPM || mgr->mode == MODE_TUNING_SPEED ||
+        mgr->mode == MODE_TUNING_TENSION))) {
     switch (mgr->mode) {
     case MODE_AUTO_TENSION:
       // Cascaded control: tension PI outputs speed setpoint
@@ -853,6 +881,7 @@ static void run_control_loop(control_manager_handle_t mgr) {
           suggested = 10; // Minimum floor
         mgr->status.detected_rpm = suggested;
         mgr->mode = MODE_IDLE;
+        safety_request_stop(mgr->safety); // Return to IDLE state
 
         // Save to NVS so it persists
         nvs_handle_t nvs;
@@ -890,6 +919,7 @@ static void run_control_loop(control_manager_handle_t mgr) {
       float saved_ki = target->ki;
 
       mgr->mode = MODE_IDLE;
+      safety_request_stop(mgr->safety); // Return to IDLE state
       lcd_show_message(mgr->lcd, "Tuning complete!", 3000);
 
       // Release mutex BEFORE NVS writes to avoid blocking control loop
@@ -944,6 +974,7 @@ static void run_control_loop(control_manager_handle_t mgr) {
   hx711_calibration_t cal;
   hx711_get_calibration(mgr->loadcell, &cal);
   mgr->status.calibrated = cal.valid;
+  mgr->status.raw_adc = hx711_get_raw_value(mgr->loadcell);
   mgr->status.uptime_seconds =
       (esp_timer_get_time() - mgr->start_time_us) / 1000000;
 

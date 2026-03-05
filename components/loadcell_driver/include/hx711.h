@@ -289,6 +289,14 @@ void hx711_set_ema_alpha(hx711_handle_t handle, float alpha);
  */
 void hx711_set_filter_size(hx711_handle_t handle, uint8_t size);
 
+/**
+ * @brief Get the last filtered raw ADC value
+ *
+ * @param[in] handle    HX711 handle
+ * @return Last filtered raw ADC count
+ */
+int32_t hx711_get_raw_value(hx711_handle_t handle);
+
 #ifdef __cplusplus
 }
 #endif

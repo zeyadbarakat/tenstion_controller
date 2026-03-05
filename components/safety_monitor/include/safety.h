@@ -66,10 +66,13 @@ typedef enum {
  * @brief Safety limits configuration
  */
 typedef struct {
-  float max_tension_kg;
-  float min_tension_kg;
+  float max_tension_percent; /**< Max allowed tension as a fraction of setpoint
+                                (e.g., 1.5 for 150%) */
+  float min_tension_percent; /**< Min allowed tension as a fraction of setpoint
+                                (e.g., 0.5 for 50%) */
+  uint32_t under_tension_timeout_ms; /**< Time tension must be below min before
+                                        faulting */
   float max_speed_rpm;
-  float min_speed_rpm;
   float warning_threshold; /**< Fraction of limit to trigger warning (e.g., 0.9)
                             */
   uint32_t stall_timeout_ms;
