@@ -187,7 +187,7 @@ static void ws_broadcast_task(void *param) {
       // Build compact JSON for WebSocket
       snprintf(
           json_buf, sizeof(json_buf),
-          "{\"tension\":%.2f,\"tensionSP\":%.1f,\"speed\":%.0f,\"speedSP\":%."
+          "{\"tension\":%.3f,\"tensionSP\":%.3f,\"speed\":%.0f,\"speedSP\":%."
           "0f,"
           "\"pwm\":%.1f,\"state\":%d,\"mode\":%d,\"faults\":%d,\"cal\":%d,"
           "\"uptime\":%lu,\"rawAdc\":%ld}",
@@ -271,6 +271,9 @@ static void web_command_cb(web_command_t cmd, float value, void *user_data) {
   case WEB_CMD_SET_MA_WINDOW:
     control_manager_set_filter_size(g_ctrl_mgr, (uint8_t)value);
     break;
+  case WEB_CMD_SET_MEDIAN_WINDOW:
+    control_manager_set_median_size(g_ctrl_mgr, (uint8_t)value);
+    break;
   case WEB_CMD_SET_CAL_OFFSET:
     control_manager_set_cal_offset(g_ctrl_mgr, (int32_t)value);
     break;
@@ -309,6 +312,12 @@ static void web_command_cb(web_command_t cmd, float value, void *user_data) {
   }
   case WEB_CMD_SET_PPR:
     control_manager_set_ppr(g_ctrl_mgr, (uint16_t)value);
+    break;
+  case WEB_CMD_SET_TENSION_UNIT:
+    control_manager_set_tension_unit(g_ctrl_mgr, (uint8_t)value);
+    break;
+  case WEB_CMD_SET_MAX_TENSION:
+    control_manager_set_max_tension(g_ctrl_mgr, value);
     break;
   default:
     break;

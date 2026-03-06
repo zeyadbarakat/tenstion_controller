@@ -86,6 +86,9 @@ struct hx711_s {
   int32_t filter_buffer[MAX_FILTER_SIZE];
   uint8_t filter_index;
   bool filter_filled;
+  int32_t median_buffer[MAX_MEDIAN_SIZE];
+  uint8_t median_index;
+  bool median_filled;
   float ema_alpha;      // EMA smoothing factor (0.01-1.0, lower = smoother)
   bool ema_initialized; // First sample flag
 
@@ -348,8 +351,28 @@ float hx711_update(hx711_handle_t handle) {
 
   xSemaphoreTake(handle->mutex, portMAX_DELAY);
 
-  // Apply moving average on raw values
-  int32_t filtered = hx711_moving_average(handle, raw);
+  // Add to rolling median buffer
+  handle->median_buffer[handle->median_index] = raw;
+  handle->median_index++;
+  if (handle->median_index >= handle->median_size) {
+    handle->median_index = 0;
+    handle->median_filled = true;
+  }
+
+  // Calculate rolling median
+  int32_t to_filter = raw;
+  uint8_t count =
+      handle->median_filled ? handle->median_size : handle->median_index;
+  if (count > 0) {
+    int32_t temp_buffer[MAX_MEDIAN_SIZE];
+    for (uint8_t i = 0; i < count; i++) {
+      temp_buffer[i] = handle->median_buffer[i];
+    }
+    to_filter = hx711_median_filter(temp_buffer, count);
+  }
+
+  // Apply moving average on median-filtered values
+  int32_t filtered = hx711_moving_average(handle, to_filter);
   handle->raw_value = filtered; // Store for external access
 
   // Calculate instantaneous weight
@@ -399,6 +422,7 @@ esp_err_t hx711_tare(hx711_handle_t handle, uint8_t samples) {
 
   xSemaphoreTake(handle->mutex, portMAX_DELAY);
   handle->offset = (int32_t)(sum / samples);
+  handle->ema_initialized = false;
   xSemaphoreGive(handle->mutex);
 
   ESP_LOGI(TAG, "Tare complete: offset = %ld", (long)handle->offset);
@@ -661,7 +685,7 @@ static int32_t hx711_shift_in(hx711_handle_t handle) {
   int32_t value = 0;
   uint8_t clock_pulses = 24 + (uint8_t)handle->gain; // 25, 26, or 27 pulses
 
-  portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+  static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 
   // Critical section - timing sensitive
   taskENTER_CRITICAL(&mux);
@@ -784,4 +808,24 @@ int32_t hx711_get_raw_value(hx711_handle_t handle) {
   if (handle == NULL)
     return 0;
   return handle->raw_value;
+}
+
+void hx711_set_median_size(hx711_handle_t handle, uint8_t size) {
+  if (handle == NULL)
+    return;
+  if (size < 1)
+    size = 1;
+  if (size > MAX_MEDIAN_SIZE)
+    size = MAX_MEDIAN_SIZE;
+  if ((size % 2) == 0)
+    size++; // Must be odd
+  if (size > MAX_MEDIAN_SIZE)
+    size = MAX_MEDIAN_SIZE; // Edge case fix
+
+  xSemaphoreTake(handle->mutex, portMAX_DELAY);
+  handle->median_size = size;
+  // Reset buffer since size changed
+  handle->median_index = 0;
+  handle->median_filled = false;
+  xSemaphoreGive(handle->mutex);
 }

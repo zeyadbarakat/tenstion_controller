@@ -388,8 +388,13 @@ static void render_main_screen(lcd_handle_t h) {
   char line[21];
 
   /* Line 0: Tension */
-  snprintf(line, 21, "T:%5.1fkg SP:%5.1fkg", h->data.tension_actual,
-           h->data.tension_setpoint);
+  if (h->data.tension_unit == 1) { // Grams
+    snprintf(line, 21, "T:%4.0fg SP:%4.0fg", h->data.tension_actual * 1000.0f,
+             h->data.tension_setpoint * 1000.0f);
+  } else { // Kg
+    snprintf(line, 21, "T:%5.1fkg SP:%5.1fkg", h->data.tension_actual,
+             h->data.tension_setpoint);
+  }
   lcd_print_line(h, 0, line);
 
   /* Line 1: Speed + PWM */
@@ -454,7 +459,12 @@ static void render_config(lcd_handle_t h) {
   snprintf(items_buf[0], 21, "PPR: %u", h->data.encoder_ppr);
   snprintf(items_buf[1], 21, "Max RPM: %u", h->data.max_rpm);
   snprintf(items_buf[2], 21, "Motor Dir: FWD");
-  snprintf(items_buf[3], 21, "Tens Step: %.1f kg", h->data.tension_step);
+  if (h->data.tension_unit == 1) {
+    snprintf(items_buf[3], 21, "Tens Step: %.0f g",
+             h->data.tension_step * 1000.0f);
+  } else {
+    snprintf(items_buf[3], 21, "Tens Step: %.1f kg", h->data.tension_step);
+  }
 
   for (int i = 0; i < CONFIG_ITEMS; i++)
     items[i] = items_buf[i];

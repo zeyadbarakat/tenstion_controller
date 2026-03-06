@@ -141,6 +141,7 @@ control_manager_config_t control_manager_get_default_config(void) {
       .control_period_ms = 100, // 10Hz
       .ui_period_ms = 200,      // 5Hz
       .default_tension_setpoint = 5.0f,
+      .default_max_tension_setpoint = 20.0f,
   };
   return config;
 }
@@ -277,6 +278,8 @@ esp_err_t control_manager_init(control_manager_handle_t *handle,
   mgr->tension_step = 0.5f;
   mgr->mode = MODE_IDLE;
   mgr->start_time_us = esp_timer_get_time();
+  mgr->status.tension_unit = 0; // default kg
+  mgr->status.max_tension_setpoint = config->default_max_tension_setpoint;
 
   // Load saved setpoint and PI gains from NVS if available
   nvs_handle_t nvs;
@@ -286,6 +289,16 @@ esp_err_t control_manager_init(control_manager_handle_t *handle,
       mgr->tension_setpoint = (float)saved_sp / 100.0f;
       ESP_LOGI(TAG, "Restored setpoint from NVS: %.2f kg",
                mgr->tension_setpoint);
+    }
+
+    int32_t saved_max_sp = 0;
+    if (nvs_get_i32(nvs, "max_tension_sp", &saved_max_sp) == ESP_OK) {
+      mgr->status.max_tension_setpoint = (float)saved_max_sp / 100.0f;
+    }
+
+    uint8_t saved_unit = 0;
+    if (nvs_get_u8(nvs, "tension_unit", &saved_unit) == ESP_OK) {
+      mgr->status.tension_unit = saved_unit;
     }
 
     // Load saved PI gains from previous auto-tune (x10000 precision)
@@ -404,6 +417,13 @@ esp_err_t control_manager_set_tension(control_manager_handle_t handle,
                                       float tension) {
   if (handle == NULL)
     return ESP_ERR_INVALID_ARG;
+
+  // Clamp tension
+  if (tension < 0.0f) {
+    tension = 0.0f;
+  } else if (tension > handle->status.max_tension_setpoint) {
+    tension = handle->status.max_tension_setpoint;
+  }
 
   xSemaphoreTake(handle->mutex, portMAX_DELAY);
   handle->tension_setpoint = tension;
@@ -718,6 +738,13 @@ void control_manager_set_filter_size(control_manager_handle_t handle,
   hx711_set_filter_size(handle->loadcell, size);
 }
 
+void control_manager_set_median_size(control_manager_handle_t handle,
+                                     uint8_t size) {
+  if (handle == NULL || handle->loadcell == NULL)
+    return;
+  hx711_set_median_size(handle->loadcell, size);
+}
+
 void control_manager_set_cal_offset(control_manager_handle_t handle,
                                     int32_t offset) {
   if (handle == NULL || handle->loadcell == NULL)
@@ -736,6 +763,30 @@ void control_manager_set_cal_scale(control_manager_handle_t handle,
   hx711_get_calibration(handle->loadcell, &cal);
   hx711_set_calibration(handle->loadcell, cal.offset, scale);
   ESP_LOGI(TAG, "Cal scale set to %.6f", scale);
+}
+
+void control_manager_set_tension_unit(control_manager_handle_t handle,
+                                      uint8_t unit) {
+  if (handle == NULL)
+    return;
+  xSemaphoreTake(handle->mutex, portMAX_DELAY);
+  handle->status.tension_unit = unit;
+  xSemaphoreGive(handle->mutex);
+  ESP_LOGI(TAG, "Tension unit updated to %d", unit);
+}
+
+void control_manager_set_max_tension(control_manager_handle_t handle,
+                                     float max_sp) {
+  if (handle == NULL)
+    return;
+  xSemaphoreTake(handle->mutex, portMAX_DELAY);
+  handle->status.max_tension_setpoint = max_sp;
+  // immediately clamp current setpoint if it exceeds new max
+  if (handle->tension_setpoint > max_sp) {
+    handle->tension_setpoint = max_sp;
+  }
+  xSemaphoreGive(handle->mutex);
+  ESP_LOGI(TAG, "Max tension setpoint updated to %.2f", max_sp);
 }
 
 /*******************************************************************************
@@ -1038,6 +1089,7 @@ static void ui_task(void *arg) {
         .encoder_ppr = encoder_get_ppr(mgr->encoder),
         .max_rpm = CONFIG_MOTOR_MAX_RPM,
         .tension_step = mgr->tension_step,
+        .tension_unit = status.tension_unit,
     };
     lcd_update(mgr->lcd, &lcd_data);
 

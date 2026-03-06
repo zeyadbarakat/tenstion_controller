@@ -44,14 +44,17 @@ typedef enum {
   // Jog mode commands (when stopped)
   WEB_CMD_JOG_START = 20, // value: -1 = left, +1 = right
   WEB_CMD_JOG_STOP = 21,
-  WEB_CMD_SET_EMA_ALPHA = 22,  // value: alpha * 100 (1-100)
-  WEB_CMD_SET_MA_WINDOW = 23,  // value: window size (1-50)
-  WEB_CMD_SET_CAL_OFFSET = 24, // value: offset (int32)
-  WEB_CMD_SET_CAL_SCALE = 25,  // value: scale (float)
-  WEB_CMD_DETECT_RPM = 26,     // auto-detect tuning RPM
-  WEB_CMD_SET_PI_GAINS = 27,   // live-update PI gains (value unused)
-  WEB_CMD_SET_SAFETY = 28,     // live-update safety limits
-  WEB_CMD_SET_PPR = 29         // live-update encoder PPR
+  WEB_CMD_SET_EMA_ALPHA = 22,    // value: alpha * 100 (1-100)
+  WEB_CMD_SET_MA_WINDOW = 23,    // value: window size (1-50)
+  WEB_CMD_SET_CAL_OFFSET = 24,   // value: offset (int32)
+  WEB_CMD_SET_CAL_SCALE = 25,    // value: scale (float)
+  WEB_CMD_DETECT_RPM = 26,       // auto-detect tuning RPM
+  WEB_CMD_SET_PI_GAINS = 27,     // live-update PI gains (value unused)
+  WEB_CMD_SET_SAFETY = 28,       // live-update safety limits
+  WEB_CMD_SET_PPR = 29,          // live-update encoder PPR
+  WEB_CMD_SET_TENSION_UNIT = 30, // live-update tension unit (0=kg, 1=g)
+  WEB_CMD_SET_MAX_TENSION = 31,  // live-update max tension setpoint
+  WEB_CMD_SET_MEDIAN_WINDOW = 32 // live-update median filter window size (1-9)
 } web_command_t;
 
 typedef void (*web_command_callback_t)(web_command_t cmd, float value,

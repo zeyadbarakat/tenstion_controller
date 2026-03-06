@@ -68,6 +68,10 @@ typedef struct {
   uint32_t uptime_seconds;
   uint16_t detected_rpm; /**< Result of auto-detect RPM (0 = not available) */
   int32_t raw_adc;       /**< Last filtered raw ADC count from load cell */
+
+  // User Preferences
+  uint8_t tension_unit;       /**< 0 = kg, 1 = grams */
+  float max_tension_setpoint; /**< Cap for tension SP */
 } system_status_t;
 
 /**
@@ -93,6 +97,7 @@ typedef struct {
 
   // Control parameters
   float default_tension_setpoint;
+  float default_max_tension_setpoint;
 } control_manager_config_t;
 
 /*******************************************************************************
@@ -292,6 +297,12 @@ void control_manager_set_filter_size(control_manager_handle_t handle,
                                      uint8_t size);
 
 /**
+ * @brief Set HX711 median filter window at runtime
+ */
+void control_manager_set_median_size(control_manager_handle_t handle,
+                                     uint8_t size);
+
+/**
  * @brief Set HX711 calibration offset at runtime
  */
 void control_manager_set_cal_offset(control_manager_handle_t handle,
@@ -309,6 +320,22 @@ void control_manager_set_cal_scale(control_manager_handle_t handle,
  * @return Default configuration
  */
 control_manager_config_t control_manager_get_default_config(void);
+
+/**
+ * @brief Set tension unit (live hot-reload)
+ * @param[in] handle    Control manager handle
+ * @param[in] unit      0 = kg, 1 = grams
+ */
+void control_manager_set_tension_unit(control_manager_handle_t handle,
+                                      uint8_t unit);
+
+/**
+ * @brief Set max tension setpoint (live hot-reload)
+ * @param[in] handle    Control manager handle
+ * @param[in] max_sp    Maximum allowed setpoint in kg
+ */
+void control_manager_set_max_tension(control_manager_handle_t handle,
+                                     float max_sp);
 
 #ifdef __cplusplus
 }

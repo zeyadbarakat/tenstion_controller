@@ -290,6 +290,14 @@ void hx711_set_ema_alpha(hx711_handle_t handle, float alpha);
 void hx711_set_filter_size(hx711_handle_t handle, uint8_t size);
 
 /**
+ * @brief Set the rolling median filter window size dynamically
+ *
+ * @param handle HX711 handle
+ * @param size New median window size (1-9, will be forced to odd number)
+ */
+void hx711_set_median_size(hx711_handle_t handle, uint8_t size);
+
+/**
  * @brief Get the last filtered raw ADC value
  *
  * @param[in] handle    HX711 handle

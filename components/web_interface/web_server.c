@@ -324,6 +324,8 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
     int32_t tension_kp_x = 2000;
     int32_t tension_ki_x = 500;
     uint16_t autotune_speed = 150;
+    uint8_t tension_unit = 0;
+    int32_t max_tension_sp = 2000; // 20.0 kg default
 
     nvs_get_u16(nvs, "ppr", &ppr);
     nvs_get_i32(nvs, "cal_offset", &cal_offset);
@@ -373,6 +375,9 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
     nvs_get_i32(nvs, "tension_ki", &tension_ki_x);
     nvs_get_u16(nvs, "autotune_speed", &autotune_speed);
 
+    nvs_get_u8(nvs, "tension_unit", &tension_unit);
+    nvs_get_i32(nvs, "max_tension_sp", &max_tension_sp);
+
     ESP_LOGI(TAG, "api_config_get_handler: speed_kp is %ld, speed_ki is %ld",
              speed_kp_x, speed_ki_x);
 
@@ -381,6 +386,9 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
 
     int32_t ma_window = 20;
     nvs_get_i32(nvs, "ma_window", &ma_window);
+
+    int32_t median_window = 5;
+    nvs_get_i32(nvs, "median_window", &median_window);
 
     nvs_close(nvs);
 
@@ -394,6 +402,10 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "autotune_speed", autotune_speed);
     cJSON_AddNumberToObject(root, "ema_alpha", (float)ema_alpha_x100 / 100.0f);
     cJSON_AddNumberToObject(root, "ma_window", ma_window);
+    cJSON_AddNumberToObject(root, "median_window", median_window);
+    cJSON_AddNumberToObject(root, "tension_unit", tension_unit);
+    cJSON_AddNumberToObject(root, "max_tension_sp",
+                            (float)max_tension_sp / 100.0f);
     cJSON_AddBoolToObject(root, "loaded", true);
   } else {
     // Defaults
@@ -407,6 +419,9 @@ static esp_err_t api_config_get_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "autotune_speed", 150);
     cJSON_AddNumberToObject(root, "ema_alpha", 0.10);
     cJSON_AddNumberToObject(root, "ma_window", 20);
+    cJSON_AddNumberToObject(root, "median_window", 5);
+    cJSON_AddNumberToObject(root, "tension_unit", 0);
+    cJSON_AddNumberToObject(root, "max_tension_sp", 10.0);
     cJSON_AddBoolToObject(root, "loaded", false);
   }
 
@@ -463,6 +478,28 @@ static esp_err_t api_config_post_handler(httpd_req_t *req) {
     nvs_set_u16(nvs, "autotune_speed", (uint16_t)item->valueint);
     ESP_LOGI(TAG, "Saved autotune_speed: %d", item->valueint);
   }
+
+  if ((item = cJSON_GetObjectItem(root, "tension_unit")) != NULL) {
+    uint8_t unit = item->valueint;
+    nvs_set_u8(nvs, "tension_unit", unit);
+    ESP_LOGI(TAG, "Saved tension_unit: %d", unit);
+    struct web_server_s *srv = (struct web_server_s *)req->user_ctx;
+    if (srv && srv->cmd_callback) {
+      srv->cmd_callback(WEB_CMD_SET_TENSION_UNIT, (float)unit,
+                        srv->cmd_user_data);
+    }
+  }
+
+  if ((item = cJSON_GetObjectItem(root, "max_tension_sp")) != NULL) {
+    float max_sp = item->valuedouble;
+    nvs_set_i32(nvs, "max_tension_sp", (int32_t)(max_sp * 100.0f));
+    ESP_LOGI(TAG, "Saved max_tension_sp: %.2f", max_sp);
+    struct web_server_s *srv = (struct web_server_s *)req->user_ctx;
+    if (srv && srv->cmd_callback) {
+      srv->cmd_callback(WEB_CMD_SET_MAX_TENSION, max_sp, srv->cmd_user_data);
+    }
+  }
+
   // NOTE: cal_offset is NOT handled here - it is managed exclusively
   // by the Tare button (cmd 5) to prevent accidental overwrites.
   if ((item = cJSON_GetObjectItem(root, "cal_scale")) != NULL) {
@@ -530,6 +567,23 @@ static esp_err_t api_config_post_handler(httpd_req_t *req) {
     struct web_server_s *srv = (struct web_server_s *)req->user_ctx;
     if (srv && srv->cmd_callback) {
       srv->cmd_callback(23, (float)win, srv->cmd_user_data);
+    }
+  }
+  if ((item = cJSON_GetObjectItem(root, "median_window")) != NULL) {
+    int32_t win = item->valueint;
+    if (win < 1)
+      win = 1;
+    if (win > 9)
+      win = 9;
+    if (win % 2 == 0)
+      win++;
+    nvs_set_i32(nvs, "median_window", win);
+    ESP_LOGI(TAG, "Saved median_window: %d", win);
+
+    struct web_server_s *srv = (struct web_server_s *)req->user_ctx;
+    if (srv && srv->cmd_callback) {
+      srv->cmd_callback(WEB_CMD_SET_MEDIAN_WINDOW, (float)win,
+                        srv->cmd_user_data);
     }
   }
 

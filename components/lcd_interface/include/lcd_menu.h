@@ -111,6 +111,7 @@ typedef struct {
   uint16_t encoder_ppr;
   uint16_t max_rpm;
   float tension_step;
+  uint8_t tension_unit;
 } lcd_display_data_t;
 
 /**

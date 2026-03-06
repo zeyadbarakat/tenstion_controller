@@ -421,7 +421,7 @@
         <div class="card">
             <div class="card-lbl">Tension</div>
             <div class="card-val tension"><span id="tension">--</span></div>
-            <div class="sp">SP: <span id="tension-sp">--</span> kg</div>
+            <div class="sp">SP: <span id="tension-sp">--</span> <span class="unit-lbl">kg</span></div>
         </div>
         <div class="card">
             <div class="card-lbl">Speed</div>
@@ -459,7 +459,7 @@
                     <span class="sp-val" id="sp-val" style="cursor: pointer;">5.0</span>
                     <input type="number" id="sp-input" class="sp-input" step="0.1" min="0" max="200"
                         style="display:none; width:80px; font-size:1.5rem; text-align:center; background:#1e293b; color:#f59e0b; border:2px solid #f59e0b; border-radius:8px;">
-                    <span class="sp-unit">kg</span>
+                    <span class="sp-unit unit-lbl">kg</span>
                 </div>
             </div>
             <button class="sp-btn plus" id="sp-plus">+</button>
@@ -526,8 +526,8 @@
                     (Zero)</button>
             </div>
             <div class="row">
-                <span class="lbl">Known Weight (kg):</span>
-                <input type="number" id="cal-known-weight" step="0.1" min="0.1" value="1.0" style="flex:1;">
+                <span class="lbl">Known Weight (<span class="unit-lbl">kg</span>):</span>
+                <input type="number" id="cal-known-weight" step="0.1" min="0" value="1.0" style="flex:1;">
             </div>
             <div class="row">
                 <button class="btn-sm btn-blue" onclick="calibrateScale()" style="width:100%;">📐
@@ -543,6 +543,13 @@
                 </div>
                 <div style="font-size:0.65rem; color:#64748b; margin-bottom:8px;">Raw ADC averaging window (1-50).
                     Higher = smoother raw</div>
+                <div class="row"><span class="lbl">Median Window:</span>
+                    <input type="range" id="median-slider" min="1" max="9" step="2" value="5" style="flex:1;"
+                        oninput="document.getElementById('median-val').textContent=this.value">
+                    <span id="median-val" style="width:30px; text-align:right; color:#a855f7;">5</span>
+                </div>
+                <div style="font-size:0.65rem; color:#64748b; margin-bottom:8px;">Spike rejection window (1-9 odd).
+                    Higher = ignores more spikes</div>
                 <div class="row"><span class="lbl">EMA Alpha:</span>
                     <input type="range" id="ema-slider" min="1" max="100" value="10" style="flex:1;"
                         oninput="document.getElementById('ema-val').textContent=this.value">
@@ -565,6 +572,16 @@
             <div class="row"><span class="lbl">Encoder PPR:</span><input type="number" id="ppr" value="600"
                     style="width:80px;"><button class="btn-sm btn-gray" onclick="savePPR()"
                     style="margin-left:8px;">💾</button></div>
+            <div class="row"><span class="lbl">Max Setpoint:</span><input type="number" id="max-tension-sp" value="20"
+                    style="width:80px;"><span class="unit-lbl"
+                    style="font-size:0.7rem;color:#64748b;margin-left:6px;">kg</span><button class="btn-sm btn-gray"
+                    onclick="saveMaxSp()" style="margin-left:8px;">💾</button></div>
+            <div class="row"><span class="lbl">Unit:</span><select id="tension-unit"
+                    style="width:80px;padding:5px;border-radius:5px;background:#1e293b;color:#fff;border:1px solid #374151;"
+                    onchange="saveUnit()">
+                    <option value="0">kg</option>
+                    <option value="1">grams</option>
+                </select></div>
             <div class="row"><span class="lbl">Tune RPM:</span><input type="number" id="autotune-speed" value="150"
                     style="width:80px;"><button class="btn-sm btn-gray" onclick="saveAutotuneSpeed()"
                     style="margin-left:8px;">💾</button><button class="btn-sm btn-blue" onclick="detectRPM()"
@@ -646,6 +663,8 @@
         let currentSetpoint = 5.0;
         let currentState = 0;
         let currentMode = 0;
+        let globalUnit = 0; // 0=kg, 1=g
+        let globalMaxSp = 20.0; // max allowed setpoint in kg
 
         // Canvas setup
         const canvas = document.getElementById('graph');
@@ -679,10 +698,14 @@
             ctx.textAlign = 'left';
             for (let i = 0; i <= 4; i++) {
                 const yPos = (h / 4) * i;
-                const yVal = (maxY - (maxY / 4) * i).toFixed(1);
+                let yVal = maxY - (maxY / 4) * i;
+                const mult = globalUnit === 1 ? 1000 : 1;
+                const dec = globalUnit === 1 ? 0 : 1;
+                yVal = (yVal * mult).toFixed(dec);
+
                 ctx.beginPath(); ctx.moveTo(25, yPos); ctx.lineTo(w, yPos); ctx.stroke();
                 ctx.fillStyle = '#64748b';
-                ctx.fillText(yVal + 'kg', 2, yPos + 3);
+                ctx.fillText(yVal + (globalUnit === 1 ? 'g' : 'kg'), 2, yPos + 3);
             }
 
             // Draw time labels on X-axis
@@ -723,8 +746,22 @@
         // Update dashboard
         function update(d) {
             document.getElementById('conn').className = 'conn on';
-            document.getElementById('tension').textContent = d.tension?.toFixed(2) ?? '--';
-            document.getElementById('tension-sp').textContent = d.tensionSP?.toFixed(1) ?? '--';
+            // TENSION DISPLAY FORMATTING
+            // When in kg (globalUnit=0): display 2 decimals (10g precision).
+            // When in grams (globalUnit=1): display 0 decimals (1g precision).
+            const mult = globalUnit === 1 ? 1000 : 1;
+            const dec = globalUnit === 1 ? 0 : 2;
+            const dec1 = globalUnit === 1 ? 0 : 1;
+
+            if (d.tension !== undefined) {
+                // To avoid rapid flicker of 1g noise, we keep the raw value as sent (which is %.3f from ESP)
+                // but display it rounded appropriately.
+                document.getElementById('tension').textContent = (d.tension * mult).toFixed(dec);
+            } else {
+                document.getElementById('tension').textContent = '--';
+            }
+
+            document.getElementById('tension-sp').textContent = d.tensionSP !== undefined ? (d.tensionSP * mult).toFixed(dec1) : '--';
             document.getElementById('speed').textContent = d.speed?.toFixed(0) ?? '--';
             document.getElementById('pwm').textContent = d.pwm?.toFixed(1) ?? '--';
             document.getElementById('state').textContent = STATES[d.state] ?? 'Unknown';
@@ -735,8 +772,8 @@
                 }
                 currentMode = d.mode;
             }
-            currentSetpoint = d.tensionSP || currentSetpoint;
-            document.getElementById('sp-val').textContent = currentSetpoint.toFixed(1);
+            if (d.tensionSP !== undefined) currentSetpoint = d.tensionSP;
+            document.getElementById('sp-val').textContent = (currentSetpoint * mult).toFixed(dec1);
 
             // State card styling
             const sc = document.getElementById('state-card');
@@ -858,25 +895,63 @@
                 else alert('Save failed');
             }).catch(() => alert('Error saving PPR'));
         }
+        function saveUnit() {
+            const unit = parseInt(document.getElementById('tension-unit').value);
+            fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tension_unit: unit })
+            }).then(r => r.json()).then(d => {
+                if (d.saved) {
+                    globalUnit = unit;
+                    updateUnitLabels(globalUnit);
+                    alert('Unit saved to NVS!');
+                } else alert('Save failed');
+            }).catch(() => alert('Error saving unit'));
+        }
+        function saveMaxSp() {
+            const maxSp = parseFloat(document.getElementById('max-tension-sp').value);
+            fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ max_tension_sp: maxSp })
+            }).then(r => r.json()).then(d => {
+                if (d.saved) {
+                    globalMaxSp = maxSp;
+                    alert('Max setpoint saved!');
+                } else alert('Save failed');
+            }).catch(() => alert('Error saving max setpoint'));
+        }
+        function updateUnitLabels(unit) {
+            const labelStr = unit === 1 ? 'g' : 'kg';
+            document.querySelectorAll('.unit-lbl').forEach(el => el.textContent = labelStr);
+            const spInput = document.getElementById('sp-input');
+            if (spInput) spInput.step = unit === 1 ? '1' : '0.1';
+            drawGraph(); // update graph y-axis labels
+        }
         function calibrateScale() {
-            const weight = parseFloat(document.getElementById('cal-known-weight').value);
+            let weight = parseFloat(document.getElementById('cal-known-weight').value);
             if (isNaN(weight) || weight <= 0) {
-                alert('Please enter a valid weight greater than 0 kg');
+                alert('Please enter a valid weight');
                 return;
             }
-            if (!confirm('Place ' + weight + ' kg on the sensor, then click OK.\n\nMake sure you have already pressed Tare with NO weight first!')) return;
-            cmd(6, weight);
+            let weightKg = weight;
+            if (globalUnit === 1) weightKg = weight / 1000.0;
+            const unitStr = globalUnit === 1 ? 'g' : 'kg';
+            if (!confirm('Place ' + weight + ' ' + unitStr + ' on the sensor, then click OK.\n\nMake sure you have already pressed Tare with NO weight first!')) return;
+            cmd(6, weightKg);
             alert('Calibrating... The scale will be calculated automatically.\nRefresh the page after a few seconds to see the updated scale value.');
         }
         function saveFilter() {
             const alpha = parseInt(document.getElementById('ema-slider').value);
             const maWin = parseInt(document.getElementById('ma-slider').value);
+            const medWin = parseInt(document.getElementById('median-slider').value);
             fetch('/api/config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ema_alpha: alpha, ma_window: maWin })
+                body: JSON.stringify({ ema_alpha: alpha, ma_window: maWin, median_window: medWin })
             }).then(r => r.json()).then(d => {
-                if (d.saved) alert('Filter applied! MA=' + maWin + ', EMA=' + (alpha / 100).toFixed(2));
+                if (d.saved) alert('Filter applied! Median=' + medWin + ', MA=' + maWin + ', EMA=' + (alpha / 100).toFixed(2));
                 else alert('Save failed');
             }).catch(() => alert('Error saving filter'));
         }
@@ -946,6 +1021,18 @@
                 if (cfg.tension_kp !== undefined && elTKp) elTKp.value = parseFloat(cfg.tension_kp).toFixed(2);
                 if (cfg.tension_ki !== undefined && elTKi) elTKi.value = parseFloat(cfg.tension_ki).toFixed(2);
 
+                if (cfg.tension_unit !== undefined) {
+                    globalUnit = cfg.tension_unit;
+                    const elUnit = document.getElementById('tension-unit');
+                    if (elUnit) elUnit.value = globalUnit;
+                    updateUnitLabels(globalUnit);
+                }
+                if (cfg.max_tension_sp !== undefined) {
+                    globalMaxSp = cfg.max_tension_sp;
+                    const elMaxSp = document.getElementById('max-tension-sp');
+                    if (elMaxSp) elMaxSp.value = globalMaxSp;
+                }
+
                 const elEmaS = document.getElementById('ema-slider');
                 const elEmaV = document.getElementById('ema-val');
                 if (cfg.ema_alpha !== undefined && elEmaS && elEmaV) {
@@ -960,6 +1047,13 @@
                     elMaS.value = cfg.ma_window;
                     elMaV.textContent = cfg.ma_window;
                 }
+
+                const elMedS = document.getElementById('median-slider');
+                const elMedV = document.getElementById('median-val');
+                if (cfg.median_window !== undefined && elMedS && elMedV) {
+                    elMedS.value = cfg.median_window;
+                    elMedV.textContent = cfg.median_window;
+                }
                 console.log('Config loaded:', cfg);
             }).catch(e => {
                 console.log('Config load error:', e);
@@ -970,19 +1064,33 @@
         let holdTimer = null;
         let holdDelay = 300;
 
-        function adjustSP(delta) {
-            currentSetpoint = Math.max(0, Math.min(200, currentSetpoint + delta));
-            currentSetpoint = Math.round(currentSetpoint * 10) / 10; // Round to 1 decimal
-            document.getElementById('sp-val').textContent = currentSetpoint.toFixed(1);
+        function adjustSP(dir) {
+            // STEP SIZE: 0.1 kg (100g) when in KG mode. 0.001 kg (1g) when in Gram mode.
+            const step = globalUnit === 1 ? 0.001 : 0.1;
+            currentSetpoint = Math.max(0, Math.min(globalMaxSp, currentSetpoint + dir * step));
+
+            // Decimal Rounding
+            if (globalUnit === 1) {
+                currentSetpoint = Math.round(currentSetpoint * 1000) / 1000; // Gram resolution
+            } else {
+                currentSetpoint = Math.round(currentSetpoint * 10) / 10; // 0.1 kg resolution
+            }
+
+            const mult = globalUnit === 1 ? 1000 : 1;
+            const dec1 = globalUnit === 1 ? 0 : 1;
+            document.getElementById('sp-val').textContent = (currentSetpoint * mult).toFixed(dec1);
             cmd(3, currentSetpoint);
         }
 
-        function startHold(delta) {
-            adjustSP(delta);
+        function startHold(dir) {
+            adjustSP(dir);
             holdDelay = 300;
             holdTimer = setTimeout(function repeat() {
-                adjustSP(delta);
-                holdDelay = Math.max(50, holdDelay * 0.8); // Accelerate
+                adjustSP(dir);
+                // Accelerate much faster if we are in 1-gram steps
+                const accel = globalUnit === 1 ? 0.6 : 0.8;
+                const minDelay = globalUnit === 1 ? 20 : 50;
+                holdDelay = Math.max(minDelay, holdDelay * accel);
                 holdTimer = setTimeout(repeat, holdDelay);
             }, holdDelay);
         }
@@ -997,32 +1105,38 @@
         const spVal = document.getElementById('sp-val');
         const spInput = document.getElementById('sp-input');
 
-        spMinus.addEventListener('mousedown', () => startHold(-0.1));
+        spMinus.addEventListener('mousedown', () => startHold(-1));
         spMinus.addEventListener('mouseup', stopHold);
         spMinus.addEventListener('mouseleave', stopHold);
-        spMinus.addEventListener('touchstart', (e) => { e.preventDefault(); startHold(-0.1); });
+        spMinus.addEventListener('touchstart', (e) => { e.preventDefault(); startHold(-1); });
         spMinus.addEventListener('touchend', stopHold);
-        spPlus.addEventListener('mousedown', () => startHold(0.1));
+        spPlus.addEventListener('mousedown', () => startHold(1));
         spPlus.addEventListener('mouseup', stopHold);
         spPlus.addEventListener('mouseleave', stopHold);
-        spPlus.addEventListener('touchstart', (e) => { e.preventDefault(); startHold(0.1); });
+        spPlus.addEventListener('touchstart', (e) => { e.preventDefault(); startHold(1); });
         spPlus.addEventListener('touchend', stopHold);
 
         // Click on setpoint value to edit directly
         spVal.addEventListener('click', () => {
             spVal.style.display = 'none';
             spInput.style.display = 'inline-block';
-            spInput.value = currentSetpoint.toFixed(1);
+            const mult = globalUnit === 1 ? 1000 : 1;
+            const dec1 = globalUnit === 1 ? 0 : 1;
+            spInput.value = (currentSetpoint * mult).toFixed(dec1);
             spInput.focus();
             spInput.select();
         });
 
         function applySpInput() {
             let val = parseFloat(spInput.value) || 0;
-            val = Math.max(0, Math.min(50, val));
+            if (globalUnit === 1) val = val / 1000.0;
+            val = Math.max(0, Math.min(globalMaxSp, val));
             val = Math.round(val * 10) / 10;
             currentSetpoint = val;
-            spVal.textContent = val.toFixed(1);
+
+            const mult = globalUnit === 1 ? 1000 : 1;
+            const dec1 = globalUnit === 1 ? 0 : 1;
+            spVal.textContent = (val * mult).toFixed(dec1);
             spVal.style.display = 'inline';
             spInput.style.display = 'none';
             cmd(3, currentSetpoint);
