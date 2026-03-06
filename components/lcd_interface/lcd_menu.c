@@ -54,7 +54,7 @@ static const uint8_t ROW_OFFSETS[4] = {0x00, 0x40, 0x14, 0x54};
  * Keypad Constants
  ******************************************************************************/
 
-#define NUM_KEYS 4
+#define NUM_KEYS 5
 #define DEBOUNCE_MS 50
 #define LONG_PRESS_MS 500
 #define REPEAT_MS 200
@@ -66,21 +66,22 @@ static const uint8_t ROW_OFFSETS[4] = {0x00, 0x40, 0x14, 0x54};
 #define MENU_ITEMS_COUNT 6
 
 static const char *MENU_ITEMS[MENU_ITEMS_COUNT] = {
-    "Calibration", "Auto-Tune", "Configuration",
-    "PI Gains",    "Faults",    "System Info",
+    "Auto-Tune", "Configuration", "PI Gains",
+    "Faults",    "WiFi Settings", "System Info",
 };
 
 static const menu_screen_t MENU_SCREENS[MENU_ITEMS_COUNT] = {
-    SCREEN_CALIBRATION, SCREEN_AUTOTUNE, SCREEN_CONFIG,
-    SCREEN_PI_GAINS,    SCREEN_FAULTS,   SCREEN_SYSINFO,
+    SCREEN_AUTOTUNE, SCREEN_CONFIG, SCREEN_PI_GAINS,
+    SCREEN_FAULTS,   SCREEN_WIFI,   SCREEN_SYSINFO,
 };
 
 /* Sub-menu item counts */
-#define CAL_ITEMS 2
 #define TUNE_ITEMS 2
-#define CONFIG_ITEMS 4
+#define CONFIG_ITEMS 5
 #define PI_ITEMS 4
-#define FAULT_ITEMS 3
+#define FAULT_ITEMS 1
+#define WIFI_ITEMS 1
+#define SYSINFO_ITEMS 4
 #define SYSINFO_ITEMS 4
 
 /*******************************************************************************
@@ -333,11 +334,13 @@ static keypad_event_t keypad_scan(lcd_handle_t h) {
 
       if (!k->long_fired && duration >= LONG_PRESS_MS) {
         k->long_fired = true;
-        /* Long press for keys 1,2 — fire once */
+        /* Long press for keys 1,2,5 — fire once */
         if (i == 0)
           event = KEY_1_LONG;
         else if (i == 1)
           event = KEY_2_LONG;
+        else if (i == 4)
+          event = KEY_5_LONG;
         /* For keys 3,4 — start hold */
         else {
           k->hold_active = true;
@@ -363,61 +366,64 @@ static keypad_event_t keypad_scan(lcd_handle_t h) {
  * Screen Rendering
  ******************************************************************************/
 
-static const char *state_name(uint8_t state) {
+static const char *short_state_name(uint8_t state) {
   switch (state) {
   case 0:
     return "IDLE";
   case 1:
-    return "STARTING";
+    return "START";
   case 2:
-    return "RUNNING";
+    return "RUN";
   case 3:
-    return "STOPPING";
+    return "STOP";
   case 4:
-    return "WARNING";
+    return "WARN";
   case 5:
     return "FAULT";
   case 6:
-    return "E-STOP";
+    return "ESTOP";
   default:
     return "???";
   }
 }
 
+static const char *fault_name(uint16_t flag);
+
 static void render_main_screen(lcd_handle_t h) {
   char line[21];
+  char actual_str[10];
+  char target_str[10];
 
-  /* Line 0: Tension */
+  /* Line 0: Header */
+  lcd_print_line(h, 0, "  ACTUAL  |  TARGET ");
+
+  /* Line 1: Values */
   if (h->data.tension_unit == 1) { // Grams
-    snprintf(line, 21, "T:%4.0fg SP:%4.0fg", h->data.tension_actual * 1000.0f,
+    snprintf(actual_str, sizeof(actual_str), "%4.0f g",
+             h->data.tension_actual * 1000.0f);
+    snprintf(target_str, sizeof(target_str), "%4.0f g",
              h->data.tension_setpoint * 1000.0f);
   } else { // Kg
-    snprintf(line, 21, "T:%5.1fkg SP:%5.1fkg", h->data.tension_actual,
+    snprintf(actual_str, sizeof(actual_str), "%4.1f kg",
+             h->data.tension_actual);
+    snprintf(target_str, sizeof(target_str), "%4.1f kg",
              h->data.tension_setpoint);
   }
-  lcd_print_line(h, 0, line);
-
-  /* Line 1: Speed + PWM */
-  snprintf(line, 21, "S:%5.0frpm PWM:%4.0f%%", h->data.speed_actual,
-           h->data.pwm_percent);
+  snprintf(line, 21, " %-8.8s | %-8.8s", actual_str, target_str);
   lcd_print_line(h, 1, line);
 
-  /* Line 2: State + fault indicator */
-  if (h->data.fault_flags) {
-    snprintf(line, 21, "%-10s F:0x%04X", state_name(h->data.system_state),
-             h->data.fault_flags);
-  } else {
-    snprintf(line, 21, "%-10s %s", state_name(h->data.system_state),
-             h->data.calibrated ? "CAL" : "!CAL");
-  }
-  lcd_print_line(h, 2, line);
+  /* Line 2: Divider */
+  lcd_print_line(h, 2, "--------------------");
 
-  /* Line 3: Check for message overlay */
-  if (h->message[0] != '\0' && esp_timer_get_time() < h->message_expire_us) {
-    lcd_print_line(h, 3, h->message);
+  /* Line 3: State + Speed + PWM or Fault */
+  if (h->data.fault_flags) {
+    snprintf(line, 21, "!! %-14s !!", fault_name(h->data.fault_flags));
+    lcd_print_line(h, 3, line);
   } else {
-    h->message[0] = '\0';
-    lcd_print_line(h, 3, "\x01\x02:Set \x03\x04:Jog \x01M");
+    snprintf(line, 21, "%c %-5.5s %4.0frpm %3.0f%%", '\x00',
+             short_state_name(h->data.system_state), h->data.speed_actual,
+             h->data.pwm_percent);
+    lcd_print_line(h, 3, line);
   }
 }
 
@@ -442,9 +448,16 @@ static void render_menu_list(lcd_handle_t h, const char *title,
   }
 }
 
-static void render_calibration(lcd_handle_t h) {
-  static const char *items[] = {"Tare (Zero)", "Span Calibrate"};
-  render_menu_list(h, "CALIBRATION", items, CAL_ITEMS);
+static void render_wifi(lcd_handle_t h) {
+  char line[21];
+  lcd_print_line(h, 0, "=== WIFI MENU ===");
+  snprintf(line, 21, "Status: %s", h->data.wifi_enabled ? "ON" : "OFF");
+  lcd_print_line(h, 1, line);
+  lcd_print_line(h, 2, "Pass: 12345678");
+
+  int cur = h->menu_cursor;
+  snprintf(line, 21, "%c Toggle WiFi", cur == 0 ? '\x00' : ' ');
+  lcd_print_line(h, 3, line);
 }
 
 static void render_autotune(lcd_handle_t h) {
@@ -460,11 +473,12 @@ static void render_config(lcd_handle_t h) {
   snprintf(items_buf[1], 21, "Max RPM: %u", h->data.max_rpm);
   snprintf(items_buf[2], 21, "Motor Dir: FWD");
   if (h->data.tension_unit == 1) {
-    snprintf(items_buf[3], 21, "Tens Step: %.0f g",
+    snprintf(items_buf[3], 21, "Tens Step: %.0fg",
              h->data.tension_step * 1000.0f);
   } else {
-    snprintf(items_buf[3], 21, "Tens Step: %.1f kg", h->data.tension_step);
+    snprintf(items_buf[3], 21, "Tens Step: %.1fkg", h->data.tension_step);
   }
+  snprintf(items_buf[4], 21, "Jog: %.0f%%", h->data.jog_speed);
 
   for (int i = 0; i < CONFIG_ITEMS; i++)
     items[i] = items_buf[i];
@@ -529,16 +543,12 @@ static void render_sysinfo(lcd_handle_t h) {
   char line[21];
 
   lcd_print_line(h, 0, "=== SYSTEM INFO ===");
+  lcd_print_line(h, 1, "Design by Z.KAT");
+  lcd_print_line(h, 2, "0787305155");
 
   uint32_t up = h->data.uptime_seconds;
   snprintf(line, 21, "Up: %02luh%02lum%02lus", (unsigned long)(up / 3600),
            (unsigned long)((up % 3600) / 60), (unsigned long)(up % 60));
-  lcd_print_line(h, 1, line);
-
-  snprintf(line, 21, "FW: v1.1.0");
-  lcd_print_line(h, 2, line);
-
-  snprintf(line, 21, "Heap: %lu B", (unsigned long)esp_get_free_heap_size());
   lcd_print_line(h, 3, line);
 }
 
@@ -586,8 +596,8 @@ static void start_edit(lcd_handle_t h, const char *label, float current,
 
 static int get_submenu_count(menu_screen_t screen) {
   switch (screen) {
-  case SCREEN_CALIBRATION:
-    return CAL_ITEMS;
+  case SCREEN_WIFI:
+    return WIFI_ITEMS;
   case SCREEN_AUTOTUNE:
     return TUNE_ITEMS;
   case SCREEN_CONFIG:
@@ -610,13 +620,11 @@ static void handle_menu_ok(lcd_handle_t h) {
     h->menu_scroll = 0;
     break;
 
-  case SCREEN_CALIBRATION:
+  case SCREEN_WIFI:
     if (h->menu_cursor == 0) {
-      emit_command(h, LCD_CMD_TARE, 0);
-      lcd_show_message(h, "Taring...", 2000);
-    } else if (h->menu_cursor == 1) {
-      start_edit(h, "Cal Weight kg", 5.0f, 0.1f, 50.0f, 0.1f,
-                 LCD_CMD_CALIBRATE);
+      emit_command(h, LCD_CMD_WIFI_TOGGLE, 0);
+      lcd_show_message(h, h->data.wifi_enabled ? "WiFi Off..." : "WiFi On...",
+                       2000);
     }
     break;
 
@@ -642,8 +650,15 @@ static void handle_menu_ok(lcd_handle_t h) {
       emit_command(h, LCD_CMD_SET_MOTOR_DIR, 0);
       lcd_show_message(h, "Dir toggled", 1500);
     } else if (h->menu_cursor == 3) {
-      start_edit(h, "Tension Step kg", h->data.tension_step, 0.1f, 5.0f, 0.1f,
-                 LCD_CMD_SET_TENSION_STEP);
+      if (h->data.tension_unit == 1) {
+        /* Gram mode: edit in grams (1g–5000g, step 1g) */
+        start_edit(h, "Tens Step g", h->data.tension_step * 1000.0f, 1.0f,
+                   5000.0f, 1.0f, LCD_CMD_SET_TENSION_STEP);
+      } else {
+        /* Kg mode: edit in kg (0.1–5.0, step 0.1) */
+        start_edit(h, "Tens Step kg", h->data.tension_step, 0.1f, 5.0f, 0.1f,
+                   LCD_CMD_SET_TENSION_STEP);
+      }
     }
     break;
 
@@ -668,12 +683,17 @@ static void handle_menu_ok(lcd_handle_t h) {
     lcd_show_message(h, "Faults cleared", 2000);
     break;
 
-  case SCREEN_EDIT_VALUE:
-    /* Confirm edit */
-    emit_command(h, h->edit_cmd, h->edit_value);
+  case SCREEN_EDIT_VALUE: {
+    /* Confirm edit — convert grams back to kg for tension step */
+    float val = h->edit_value;
+    if (h->edit_cmd == LCD_CMD_SET_TENSION_STEP && h->data.tension_unit == 1) {
+      val = val / 1000.0f; /* grams -> kg */
+    }
+    emit_command(h, h->edit_cmd, val);
     lcd_show_message(h, "Saved!", 1500);
     h->current_screen = SCREEN_MENU;
     break;
+  }
 
   default:
     break;
@@ -726,7 +746,8 @@ static void process_key_event(lcd_handle_t h, keypad_event_t ev) {
     case KEY_2_SHORT:
       emit_command(h, LCD_CMD_TENSION_DOWN, h->data.tension_step);
       break;
-    case KEY_1_LONG:
+    case KEY_5_SHORT:
+    case KEY_5_LONG:
       /* Enter menu */
       h->current_screen = SCREEN_MENU;
       h->menu_cursor = 0;
@@ -757,8 +778,9 @@ static void process_key_event(lcd_handle_t h, keypad_event_t ev) {
 
   /* === MENU / SUBMENU / EDIT SCREENS === */
   switch (ev) {
-  case KEY_1_LONG:
-    /* Exit to parent */
+  case KEY_3_SHORT:
+  case KEY_3_HOLD:
+    /* Exit to parent (LEFT) */
     if (h->current_screen == SCREEN_EDIT_VALUE) {
       /* Cancel edit — go back to menu */
       h->current_screen = SCREEN_MENU;
@@ -773,24 +795,18 @@ static void process_key_event(lcd_handle_t h, keypad_event_t ev) {
       h->menu_scroll = 0;
     }
     break;
-  case KEY_2_SHORT:
+  case KEY_5_SHORT:
+  case KEY_5_LONG:
+  case KEY_4_SHORT: // Right can also mean ENTER in menus
     handle_menu_ok(h);
     break;
-  case KEY_3_SHORT:
+  case KEY_1_SHORT:
+  case KEY_1_LONG:
     handle_navigate(h, -1); /* Up / decrease */
     break;
-  case KEY_4_SHORT:
+  case KEY_2_SHORT:
+  case KEY_2_LONG:
     handle_navigate(h, +1); /* Down / increase */
-    break;
-  case KEY_3_HOLD:
-    if (h->current_screen == SCREEN_EDIT_VALUE) {
-      handle_navigate(h, -1); /* Fast decrease */
-    }
-    break;
-  case KEY_4_HOLD:
-    if (h->current_screen == SCREEN_EDIT_VALUE) {
-      handle_navigate(h, +1); /* Fast increase */
-    }
     break;
   default:
     break;
@@ -856,8 +872,8 @@ void lcd_update(lcd_handle_t handle, const lcd_display_data_t *data) {
   case SCREEN_MENU:
     render_menu_list(handle, "MENU", MENU_ITEMS, MENU_ITEMS_COUNT);
     break;
-  case SCREEN_CALIBRATION:
-    render_calibration(handle);
+  case SCREEN_WIFI:
+    render_wifi(handle);
     break;
   case SCREEN_AUTOTUNE:
     render_autotune(handle);

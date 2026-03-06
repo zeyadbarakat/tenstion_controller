@@ -129,6 +129,9 @@ autotune_config_t autotune_get_default_config(void) {
       .timeout_s = 120,         // 2 minute timeout
       .rule =
           TUNE_RULE_NO_OVERSHOOT, // Safe for unwinding (no material breakage)
+      .min_amplitude = 0.5f,      // Minimum PV oscillation amplitude
+      .max_kp = 100.0f,           // Maximum valid Kp
+      .max_ki = 50.0f,            // Maximum valid Ki
   };
   return config;
 }
@@ -533,9 +536,13 @@ static void analyze_oscillation(autotune_handle_t handle) {
   float a = total_amp / amp_count / 2.0f; // Half amplitude (peak-to-center)
 
   // Validate oscillation amplitude - reject if too small (noise)
-  if (a < 0.5f) {
+  float min_amp = handle->config.min_amplitude;
+  if (min_amp <= 0.0f)
+    min_amp = 0.5f; // Fallback default
+  if (a < min_amp) {
     handle->result.valid = false;
-    ESP_LOGW(TAG, "Oscillation amplitude too small: %.4f (min 0.5)", a * 2.0f);
+    ESP_LOGW(TAG, "Oscillation amplitude too small: %.4f (min %.4f)", a * 2.0f,
+             min_amp * 2.0f);
     ESP_LOGW(TAG, "Check: relay amplitude, sensor connection, setpoint");
     return;
   }
@@ -596,10 +603,16 @@ static void calculate_gains(autotune_handle_t handle) {
   }
 
   // Sanity check: reject obviously bad gains
-  if (kp < 0.001f || kp > 100.0f || ki < 0.0001f || ki > 50.0f) {
+  float kp_max = handle->config.max_kp;
+  float ki_max = handle->config.max_ki;
+  if (kp_max <= 0.0f)
+    kp_max = 100.0f; // Fallback default
+  if (ki_max <= 0.0f)
+    ki_max = 50.0f; // Fallback default
+  if (kp < 0.001f || kp > kp_max || ki < 0.0001f || ki > ki_max) {
     handle->result.valid = false;
     ESP_LOGW(TAG, "Calculated gains out of range: Kp=%.6f Ki=%.6f", kp, ki);
-    ESP_LOGW(TAG, "Expected: Kp 0.001-100.0, Ki 0.0001-50.0");
+    ESP_LOGW(TAG, "Expected: Kp 0.001-%.1f, Ki 0.0001-%.1f", kp_max, ki_max);
     return;
   }
 

@@ -276,6 +276,7 @@ esp_err_t control_manager_init(control_manager_handle_t *handle,
   // Set defaults
   mgr->tension_setpoint = config->default_tension_setpoint;
   mgr->tension_step = 0.5f;
+  mgr->status.tension_step = mgr->tension_step;
   mgr->mode = MODE_IDLE;
   mgr->start_time_us = esp_timer_get_time();
   mgr->status.tension_unit = 0; // default kg
@@ -609,8 +610,37 @@ void control_manager_start_autotune(control_manager_handle_t handle,
 
   // Use the fetched operating point for speed tuning
   cfg.setpoint = speed_loop ? (float)auto_spd : handle->tension_setpoint;
-  cfg.relay_amplitude = 20.0f;
-  cfg.bias = 30.0f;
+
+  if (speed_loop) {
+    // Speed loop: relay drives PWM directly
+    cfg.relay_amplitude = 20.0f;
+    cfg.bias = 30.0f;
+    cfg.min_amplitude = 0.5f; // RPM oscillation minimum
+    cfg.max_kp = 100.0f;
+    cfg.max_ki = 50.0f;
+  } else {
+    // Tension loop: relay drives speed setpoint, PV is in Kg
+    // Plant has very low gain (large speed change → small tension change)
+    // so Ku and Kp will be naturally high — that's correct
+    cfg.relay_amplitude = 15.0f; // ±15 RPM speed swing
+    cfg.bias = 30.0f;
+
+    // Read user-configured min amplitude from safety limits (in grams)
+    safety_limits_t limits = safety_get_default_limits();
+    nvs_handle_t nvs_safety;
+    if (nvs_open("safety", NVS_READONLY, &nvs_safety) == ESP_OK) {
+      size_t size = sizeof(safety_limits_t);
+      nvs_get_blob(nvs_safety, "limits", &limits, &size);
+      nvs_close(nvs_safety);
+    }
+    float min_amp_g = limits.autotune_min_amp_g;
+    if (min_amp_g <= 0.0f)
+      min_amp_g = 50.0f;                     // Fallback 50g
+    cfg.min_amplitude = min_amp_g / 1000.0f; // Convert grams → Kg
+
+    cfg.max_kp = 1000.0f; // Allow high Kp (plant needs ~400)
+    cfg.max_ki = 500.0f;  // Allow high Ki proportionally
+  }
 
   autotune_start(handle->autotuner, &cfg);
 
@@ -1182,10 +1212,10 @@ static void on_menu_command(lcd_command_id_t cmd, float value,
     control_manager_set_tension(mgr, mgr->tension_setpoint - value);
     break;
   case LCD_CMD_JOG_LEFT:
-    control_manager_jog(mgr, -30.0f); /* 30% speed left */
+    control_manager_jog(mgr, -safety_get_jog_speed_from_nvs());
     break;
   case LCD_CMD_JOG_RIGHT:
-    control_manager_jog(mgr, 30.0f); /* 30% speed right */
+    control_manager_jog(mgr, safety_get_jog_speed_from_nvs());
     break;
   case LCD_CMD_JOG_STOP:
     control_manager_jog(mgr, 0.0f);
@@ -1193,9 +1223,7 @@ static void on_menu_command(lcd_command_id_t cmd, float value,
   case LCD_CMD_TARE:
     control_manager_start_tare(mgr);
     break;
-  case LCD_CMD_CALIBRATE:
-    control_manager_start_calibration(mgr, value);
-    break;
+
   case LCD_CMD_AUTOTUNE_SPEED:
     control_manager_start_autotune(mgr, true);
     break;
@@ -1207,7 +1235,8 @@ static void on_menu_command(lcd_command_id_t cmd, float value,
     break;
   case LCD_CMD_SET_TENSION_STEP:
     mgr->tension_step = value;
-    ESP_LOGI(TAG, "Tension step set to %.1f kg", value);
+    mgr->status.tension_step = value;
+    ESP_LOGI(TAG, "Tension step set to %.3f", value);
     break;
   case LCD_CMD_SET_PPR: {
     uint16_t ppr = (uint16_t)value;
@@ -1238,7 +1267,20 @@ static void on_menu_command(lcd_command_id_t cmd, float value,
     pi_set_gains(&mgr->tension_pi, mgr->tension_pi.kp, value);
     ESP_LOGI(TAG, "Tension Ki set to %.4f", value);
     break;
+  case LCD_CMD_RUN:
+    control_manager_run(mgr);
+    break;
+  case LCD_CMD_STOP:
+    control_manager_stop_controlled(mgr);
+    break;
+  case LCD_CMD_SET_MOTOR_DIR:
+    ESP_LOGI(TAG, "Motor direction toggled");
+    break;
+  case LCD_CMD_SET_MAX_RPM:
+    ESP_LOGI(TAG, "Max RPM set to %.0f", value);
+    break;
   default:
+    ESP_LOGD(TAG, "Unhandled LCD cmd: %d", cmd);
     break;
   }
 }

@@ -74,6 +74,9 @@ typedef struct {
   uint8_t min_cycles;    /**< Minimum oscillation cycles (3-5) */
   uint32_t timeout_s;    /**< Maximum tuning time */
   autotune_rule_t rule;  /**< Tuning rule to apply */
+  float min_amplitude;   /**< Minimum valid oscillation amplitude (0=auto) */
+  float max_kp;          /**< Maximum valid Kp (0=use default 100) */
+  float max_ki;          /**< Maximum valid Ki (0=use default 50) */
 } autotune_config_t;
 
 /**

@@ -36,6 +36,7 @@
 #include "driver/gpio.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -48,54 +49,91 @@
 #include <string.h>
 
 #include "control_manager.h"
-#include "led_strip.h"
+#include "lcd_menu.h"
+
+#include "safety.h"
 #include "system_config.h"
 #include "web_server.h"
 #include "wifi_manager.h"
 
 static const char *TAG = "main";
 
-// Status LED config - WS2812 on GPIO38 (ESP32-S3-DevKitC-1 v1.1)
-// Use GPIO48 for older ESP32-S3-DevKitC-1 boards
-#define RGB_LED_GPIO 38
 #define FLASH_BUTTON_GPIO 0
 
-// WS2812 LED strip handle (using RMT)
-static led_strip_handle_t led_strip = NULL;
-
-static void led_set_color(uint8_t r, uint8_t g, uint8_t b) {
-  if (led_strip) {
-    led_strip_set_pixel(led_strip, 0, r, g, b);
-    led_strip_refresh(led_strip);
-  }
-}
-
-static void init_status_led(void) {
-  // Configure WS2812 LED using RMT
-  led_strip_config_t strip_config = {
-      .strip_gpio_num = RGB_LED_GPIO,
-      .max_leds = 1,
-  };
-  led_strip_rmt_config_t rmt_config = {
-      .resolution_hz = 10 * 1000 * 1000, // 10MHz
-      .flags.with_dma = false,
-  };
-  ESP_ERROR_CHECK(
-      led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
-  led_strip_clear(led_strip);
-  ESP_LOGI(TAG, "WS2812 Status LED initialized on GPIO %d", RGB_LED_GPIO);
-}
-
 static void init_flash_button(void) {
-  gpio_config_t io_conf = {
-      .pin_bit_mask = (1ULL << FLASH_BUTTON_GPIO),
-      .mode = GPIO_MODE_INPUT,
-      .pull_up_en = GPIO_PULLUP_ENABLE,
-      .pull_down_en = GPIO_PULLDOWN_DISABLE,
-      .intr_type = GPIO_INTR_DISABLE,
-  };
+  gpio_config_t io_conf;
+  io_conf.pin_bit_mask = (1ULL << FLASH_BUTTON_GPIO);
+  io_conf.mode = GPIO_MODE_INPUT;
+  io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+  io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+  io_conf.intr_type = GPIO_INTR_DISABLE;
   gpio_config(&io_conf);
   ESP_LOGI(TAG, "Flash button initialized on GPIO %d", FLASH_BUTTON_GPIO);
+}
+
+// Web status callback handles (Must be above status_led_task)
+static control_manager_handle_t g_ctrl_mgr = NULL;
+static web_server_handle_t g_web_srv = NULL;
+static bool g_wifi_enabled = false;
+
+// Background task to blink/drive the discrete status LEDs
+static void status_led_task(void *param) {
+  TickType_t last_wake = xTaskGetTickCount();
+
+  // Configure discrete LEDs as outputs
+  gpio_config_t led_conf = {.pin_bit_mask = (1ULL << PIN_LED_RUNNING) |
+                                            (1ULL << PIN_LED_FAULT),
+                            .mode = GPIO_MODE_OUTPUT,
+                            .pull_up_en = GPIO_PULLUP_DISABLE,
+                            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+                            .intr_type = GPIO_INTR_DISABLE};
+  gpio_config(&led_conf);
+
+  // Start LEDs off
+  gpio_set_level(PIN_LED_RUNNING, 0);
+  gpio_set_level(PIN_LED_FAULT, 0);
+
+  bool toggle = false;
+
+  while (1) {
+    toggle = !toggle;
+
+    if (g_ctrl_mgr) {
+      system_status_t sys_status;
+      control_manager_get_status(g_ctrl_mgr, &sys_status);
+
+      // 1. FAULT LED Logic (RED)
+      if (sys_status.system_state == SYSTEM_STATE_FAULT ||
+          sys_status.system_state == SYSTEM_STATE_EMERGENCY_STOP) {
+        // Blink fault LED rapidly
+        gpio_set_level(PIN_LED_FAULT, toggle);
+      } else if (sys_status.system_state == SYSTEM_STATE_WARNING) {
+        // Warning = Solid Red/Yellow
+        gpio_set_level(PIN_LED_FAULT, 1);
+      } else {
+        // No faults
+        gpio_set_level(PIN_LED_FAULT, 0);
+      }
+
+      // 2. RUN LED Logic (GREEN)
+      if (sys_status.system_state == SYSTEM_STATE_STARTING ||
+          sys_status.system_state == SYSTEM_STATE_STOPPING) {
+        // Transitioning = blinking green
+        gpio_set_level(PIN_LED_RUNNING, toggle);
+      } else if (sys_status.system_state == SYSTEM_STATE_RUNNING ||
+                 sys_status.mode == 3 /* MODE_TUNING_SPEED */ ||
+                 sys_status.mode == 4 /* MODE_TUNING_TENSION */) {
+        // Running active = solid green
+        gpio_set_level(PIN_LED_RUNNING, 1);
+      } else {
+        // IDLE = off
+        gpio_set_level(PIN_LED_RUNNING, 0);
+      }
+    }
+
+    // 2.5Hz blink rate (200ms toggle = 400ms period)
+    vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(200));
+  }
 }
 
 // WiFi event handler
@@ -164,12 +202,9 @@ static esp_err_t init_wifi_ap(void) {
   ESP_LOGI(TAG, "WiFi AP started - SSID: %s", WIFI_AP_SSID);
   ESP_LOGI(TAG, "Connect to http://192.168.4.1 for web interface");
 
+  g_wifi_enabled = true;
   return ESP_OK;
 }
-
-// Web status callback
-static control_manager_handle_t g_ctrl_mgr = NULL;
-static web_server_handle_t g_web_srv = NULL;
 
 // WebSocket broadcast task - pushes sensor data at 50Hz
 static void ws_broadcast_task(void *param) {
@@ -204,6 +239,8 @@ static void ws_broadcast_task(void *param) {
     vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(20));
   }
 }
+
+// Removed duplicates
 
 static void web_status_cb(web_status_data_t *status, void *user_data) {
   if (g_ctrl_mgr && status) {
@@ -254,12 +291,12 @@ static void web_command_cb(web_command_t cmd, float value, void *user_data) {
   case WEB_CMD_RESET_FAULTS:
     control_manager_reset_faults(g_ctrl_mgr);
     break;
-  case WEB_CMD_JOG_START:
-    // Jog motor at 25% speed when stopped
-    // value: -1 = left/reverse, +1 = right/forward
-    ESP_LOGI(TAG, "Jog start: direction %.0f", value);
-    control_manager_jog(g_ctrl_mgr, value > 0 ? 25.0f : -25.0f);
+  case WEB_CMD_JOG_START: {
+    float speed = safety_get_jog_speed_from_nvs();
+    ESP_LOGI(TAG, "Jog start: direction %.0f at %.1f%%", value, speed);
+    control_manager_jog(g_ctrl_mgr, value > 0 ? speed : -speed);
     break;
+  }
   case WEB_CMD_JOG_STOP:
     ESP_LOGI(TAG, "Jog stop");
     control_manager_jog(g_ctrl_mgr, 0.0f);
@@ -335,17 +372,8 @@ void app_main(void) {
   ESP_LOGI(TAG, "=========================================");
   ESP_LOGI(TAG, "");
 
-  // === Initialize Status LED ===
-  init_status_led();
+  // === Initialize Flash Button ===
   init_flash_button();
-
-  // Blink LED to show startup (blue blink)
-  for (int i = 0; i < 3; i++) {
-    led_set_color(0, 0, 50);
-    vTaskDelay(pdMS_TO_TICKS(100));
-    led_set_color(0, 0, 0);
-    vTaskDelay(pdMS_TO_TICKS(100));
-  }
 
   // === Initialize NVS ===
   esp_err_t ret = nvs_flash_init();
@@ -437,15 +465,20 @@ void app_main(void) {
              esp_err_to_name(ret));
     ESP_LOGE(TAG, "System halted - check hardware connections");
     while (1) {
-      // Blink error pattern (red)
-      led_set_color(50, 0, 0);
+      // Blink fault LED to signal error
+      gpio_set_level(PIN_LED_FAULT, 1);
       vTaskDelay(pdMS_TO_TICKS(200));
-      led_set_color(0, 0, 0);
+      gpio_set_level(PIN_LED_FAULT, 0);
       vTaskDelay(pdMS_TO_TICKS(800));
     }
   }
 
   ESP_LOGI(TAG, "Control manager initialized successfully");
+
+  // === Start discrete status LEDs (RUNNING + FAULT) ===
+  xTaskCreate(status_led_task, "status_leds", 2048, NULL, 3, NULL);
+  ESP_LOGI(TAG, "Status LED task started (GPIO %d, %d)", PIN_LED_RUNNING,
+           PIN_LED_FAULT);
   ESP_LOGI(TAG, "");
 
   // === Start Control System ===
@@ -484,38 +517,6 @@ void app_main(void) {
     // Get current status
     system_status_t status;
     control_manager_get_status(g_ctrl_mgr, &status);
-
-    static uint8_t led_phase = 0;
-
-    // Update LED pattern only every 500ms to preserve correct flash frequency
-    if (loop_count % 5 == 0) {
-      led_phase = (led_phase + 1) % 8; // 8 phases for the pattern
-
-      // GRB color order for WS2812
-      uint8_t g = 0, r = 0, b = 0;
-
-      if (led_phase < 6) {
-        // Phases 0-5: Status color (3 blinks = on/off/on/off/on/off)
-        bool on = (led_phase % 2 == 0); // Even phases = LED on
-        if (status.fault_flags != 0) {
-          // Fault - red
-          r = on ? 40 : 0;
-        } else {
-          // Normal - green
-          g = on ? 20 : 0;
-        }
-      } else {
-        // Phases 6-7: WiFi indicator (1 blink)
-        bool on = (led_phase == 6);
-        if (wifi_enabled) {
-          // WiFi on - blue
-          b = on ? 30 : 0;
-        }
-        // WiFi off - no light (just stays off)
-      }
-
-      led_set_color(g, r, b);
-    }
 
     if (gpio_get_level(FLASH_BUTTON_GPIO) == 0) {
       if (btn_press_time == 0) {

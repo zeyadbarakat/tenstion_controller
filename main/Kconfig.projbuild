@@ -113,7 +113,13 @@ menu "Tension Controller Configuration"
             int "Keypad Key4 (►) GPIO"
             default 7
             help
-                GPIO pin for keypad key 4 (jog right / menu navigate)
+                GPIO pin for keypad key 4 (right)
+
+        config KEY_GPIO_5
+            int "Keypad Key5 (ENTER) GPIO"
+            default 3
+            help
+                GPIO pin for keypad key 5 (enter/confirm)
 
         config LCD_I2C_ADDR
             hex "LCD I2C Address"

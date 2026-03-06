@@ -43,10 +43,11 @@
 #define PIN_LED_FAULT CONFIG_LED_GPIO_FAULT
 
 // Keypad Pins (1x4 Membrane, Active Low with Pull-up)
-#define PIN_KEY1 CONFIG_KEY_GPIO_1 // ▲ Tension up / Menu enter
-#define PIN_KEY2 CONFIG_KEY_GPIO_2 // ▼ Tension down / Menu OK
-#define PIN_KEY3 CONFIG_KEY_GPIO_3 // ◄ Jog left / Menu nav up
-#define PIN_KEY4 CONFIG_KEY_GPIO_4 // ► Jog right / Menu nav down
+#define PIN_KEY1 CONFIG_KEY_GPIO_1 // ▲ Up
+#define PIN_KEY2 CONFIG_KEY_GPIO_2 // ▼ Down
+#define PIN_KEY3 CONFIG_KEY_GPIO_3 // ◄ Left
+#define PIN_KEY4 CONFIG_KEY_GPIO_4 // ► Right
+#define PIN_KEY5 CONFIG_KEY_GPIO_5 // ○ Enter/OK
 
 // LCD I2C Configuration
 #define LCD_I2C_ADDR CONFIG_LCD_I2C_ADDR

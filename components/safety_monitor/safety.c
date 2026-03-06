@@ -89,8 +89,21 @@ safety_limits_t safety_get_default_limits(void) {
       .encoder_pwm_threshold = 25.0f,
       .stall_pwm_threshold = 30.0f,
       .stall_speed_threshold = 10.0f,
+      .jog_speed_percent = 25.0f,
+      .autotune_min_amp_g = 50.0f, // 50 grams minimum oscillation
   };
   return limits;
+}
+
+float safety_get_jog_speed_from_nvs(void) {
+  safety_limits_t limits = safety_get_default_limits();
+  nvs_handle_t nvs;
+  if (nvs_open("safety", NVS_READONLY, &nvs) == ESP_OK) {
+    size_t size = sizeof(safety_limits_t);
+    nvs_get_blob(nvs, "limits", &limits, &size);
+    nvs_close(nvs);
+  }
+  return limits.jog_speed_percent;
 }
 
 esp_err_t safety_init(safety_handle_t *handle) {

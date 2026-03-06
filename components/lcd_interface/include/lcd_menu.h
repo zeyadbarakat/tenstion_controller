@@ -25,21 +25,21 @@ extern "C" {
  * @brief Menu screens
  */
 typedef enum {
-  SCREEN_MAIN = 0,    /**< Main status display */
-  SCREEN_MENU,        /**< Menu list */
-  SCREEN_CALIBRATION, /**< Calibration submenu */
-  SCREEN_AUTOTUNE,    /**< Auto-tune submenu */
-  SCREEN_CONFIG,      /**< Configuration submenu */
-  SCREEN_PI_GAINS,    /**< PI gains view/edit */
-  SCREEN_FAULTS,      /**< Fault display/clear */
-  SCREEN_SYSINFO,     /**< System info */
-  SCREEN_EDIT_VALUE,  /**< Value editing overlay */
+  SCREEN_MAIN = 0,   /**< Main status display */
+  SCREEN_MENU,       /**< Menu list */
+  SCREEN_WIFI,       /**< WiFi submenu */
+  SCREEN_AUTOTUNE,   /**< Auto-tune submenu */
+  SCREEN_CONFIG,     /**< Configuration submenu */
+  SCREEN_PI_GAINS,   /**< PI gains view/edit */
+  SCREEN_FAULTS,     /**< Fault display/clear */
+  SCREEN_SYSINFO,    /**< System info */
+  SCREEN_EDIT_VALUE, /**< Value editing overlay */
 } menu_screen_t;
 
 /* Keep old enum name for compatibility */
 #define MENU_MAIN SCREEN_MAIN
 #define MENU_SETTINGS SCREEN_CONFIG
-#define MENU_CALIBRATION SCREEN_CALIBRATION
+#define MENU_WIFI SCREEN_WIFI
 #define MENU_TUNING SCREEN_AUTOTUNE
 #define MENU_DIAGNOSTICS SCREEN_SYSINFO
 #define MENU_RUN SCREEN_MAIN
@@ -53,8 +53,10 @@ typedef enum {
   KEY_2_SHORT,   /**< ▼ short press */
   KEY_3_SHORT,   /**< ◄ short press */
   KEY_4_SHORT,   /**< ► short press */
+  KEY_5_SHORT,   /**< ○ short press (enter) */
   KEY_1_LONG,    /**< ▲ long press (>500ms) */
   KEY_2_LONG,    /**< ▼ long press */
+  KEY_5_LONG,    /**< ○ long press */
   KEY_3_HOLD,    /**< ◄ held down */
   KEY_4_HOLD,    /**< ► held down */
   KEY_3_RELEASE, /**< ◄ released (stop jog) */
@@ -74,7 +76,7 @@ typedef enum {
   LCD_CMD_RUN,
   LCD_CMD_STOP,
   LCD_CMD_TARE,
-  LCD_CMD_CALIBRATE,
+  LCD_CMD_WIFI_TOGGLE,
   LCD_CMD_AUTOTUNE_SPEED,
   LCD_CMD_AUTOTUNE_TENSION,
   LCD_CMD_CLEAR_FAULTS,
@@ -112,6 +114,8 @@ typedef struct {
   uint16_t max_rpm;
   float tension_step;
   uint8_t tension_unit;
+  float jog_speed;
+  bool wifi_enabled;
 } lcd_display_data_t;
 
 /**
@@ -121,7 +125,7 @@ typedef struct {
   int sda_gpio;
   int scl_gpio;
   uint8_t i2c_addr;
-  int key_gpios[4]; /**< KEY1, KEY2, KEY3, KEY4 */
+  int key_gpios[5]; /**< KEY1, KEY2, KEY3, KEY4, KEY5 */
 } lcd_config_t;
 
 /**

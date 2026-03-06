@@ -86,6 +86,9 @@ typedef struct {
   float encoder_pwm_threshold;  /**< Min PWM% before expecting encoder pulses */
   float stall_pwm_threshold;    /**< Min PWM% before considering a stall */
   float stall_speed_threshold; /**< Speed below this + high PWM = stall (RPM) */
+  float jog_speed_percent;     /**< Configurable manual jog speed (%) */
+  float autotune_min_amp_g; /**< Min oscillation amplitude for tension autotune
+                               (grams) */
 } safety_limits_t;
 
 /**
@@ -114,6 +117,12 @@ typedef struct safety_s *safety_handle_t;
 /*******************************************************************************
  * Public API Functions
  ******************************************************************************/
+
+/**
+ * @brief Get manual jog speed percent directly from NVS
+ * @return Jog speed percent
+ */
+float safety_get_jog_speed_from_nvs(void);
 
 /**
  * @brief Initialize safety monitor

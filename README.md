@@ -13,7 +13,7 @@ A production-ready cascaded PI tension control system for unwinding applications
 - **Unwinder Sign Inversion** — Negated tension PI output for inverse plant (more speed = less tension)
 - **Relay Feedback Auto-Tuning** — Åström-Hägglund method with No-Overshoot tuning rule
 - **Adjustable Auto-Tune** — Modifiable tuning RPM directly from the Web API & Dashboard
-- **20x4 I2C LCD & 1x4 Keypad** — Full physical interface for standalone operation
+- **20x4 I2C LCD & 1x5 Keypad** — Full physical interface for standalone operation
 - **Real-Time WebSocket Dashboard** — 50Hz Chart.js graphs via WebSocket push
 - **Extended Tension Envelope** — Setpoints up to 200kg supported natively
 - **PCNT Quadrature Encoder** — Hardware 4x decoding, 600 PPR supported
@@ -48,7 +48,7 @@ The cascaded PI controller continuously adjusts the PWM output — no jerky star
 | Encoder | 600 PPR Quadrature |
 | Load Cell | 10-50kg with HX711 |
 | LCD | 20x4 Character LCD + PCF8574 I2C |
-| Keypad | 1x4 Membrane (or 4 generic buttons) |
+| Keypad | 1x5 Membrane (or 5 generic buttons) |
 | Motor Driver | H-Bridge (BTS7960 or similar) |
 | Buttons | RUN, STOP, E-STOP (NC) |
 
@@ -64,9 +64,10 @@ The cascaded PI controller continuously adjusts the PWM output — no jerky star
     Encoder B ──────────┤ GPIO5       │
                         │             │
     KEY1 (UP) ──────────┤ GPIO1       │
-    KEY2 (OK) ──────────┤ GPIO2       │
+    KEY2 (DOWN) ────────┤ GPIO2       │
     KEY3 (LEFT) ────────┤ GPIO6       │
     KEY4 (RIGHT) ───────┤ GPIO7       │
+    KEY5 (ENTER) ───────┤ GPIO3       │
                         │             │
     LCD SDA ────────────┤ GPIO8       │
     LCD SCL ────────────┤ GPIO9       │
@@ -74,8 +75,13 @@ The cascaded PI controller continuously adjusts the PWM output — no jerky star
     HX711 DATA ─────────┤ GPIO13      │
     HX711 CLK ──────────┤ GPIO14      │
                         │             │
-    Motor PWM ──────────┤ GPIO15      ├───── H-Bridge IN1
-    Motor DIR ──────────┤ GPIO16      ├───── H-Bridge IN2
+    Motor PWM ──────────┤ GPIO15      ├───── H-Bridge IN1 (RPWM)
+    Motor DIR ──────────┤ GPIO16      ├───── H-Bridge IN2 (LPWM)
+    Motor R_EN ─────────┤ GPIO17      ├───── H-Bridge R_EN
+    Motor L_EN ─────────┤ GPIO18      ├───── H-Bridge L_EN
+                        │             │
+    RUN LED ────────────┤ GPIO41      │      (Green LED + Resistor)
+    FAULT LED ──────────┤ GPIO42      │      (Red LED + Resistor)
                         │             │
     RUN Button ──┬──────┤ GPIO10      │      (NC to GND)
                  │      │             │
@@ -93,10 +99,11 @@ The cascaded PI controller continuously adjusts the PWM output — no jerky star
 | :--- | :--- | :--- |
 | **I2C LCD** | GPIO 8 (SDA) | Pull-ups required if not on module |
 | | GPIO 9 (SCL) | Pull-ups required if not on module |
-| **Keypad (1x4)**| GPIO 1 (Key1) | ▲ Tension Up / Menu Enter (Internal Pull-up) |
-| | GPIO 2 (Key2) | ▼ Tension Down / Menu OK (Internal Pull-up) |
-| | GPIO 6 (Key3) | ◄ Jog Left / Menu Nav Up (Internal Pull-up) |
-| | GPIO 7 (Key4) | ► Jog Right / Menu Nav Down (Internal Pull-up) |
+| **Keypad (1x5)**| GPIO 1 (Key1) | ▲ Up (Tension Up / Menu scroll) |
+| | GPIO 2 (Key2) | ▼ Down (Tension Down / Menu scroll) |
+| | GPIO 6 (Key3) | ◄ Left (Jog Reverse / Menu Exit) |
+| | GPIO 7 (Key4) | ► Right (Jog Forward / Menu Enter) |
+| | GPIO 3 (Key5) | ○ Enter (Open Menu / Confirm) |
 | **Encoder** | GPIO 4 (A) | A phase |
 | | GPIO 5 (B) | B phase |
 | **Load Cell** | GPIO 13 (DT) | HX711 Data |

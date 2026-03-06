@@ -642,6 +642,16 @@
             <div class="row"><span class="lbl">UT Floor:</span><input type="number" id="sf-ut-floor" step="0.01"
                     style="width:70px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">kg — Below this =
                     noise, ignore</span></div>
+            <div class="row"><span class="lbl">Jog Speed%:</span><input type="number" id="sf-jog-speed" step="1"
+                    style="width:70px;"><span style="font-size:0.7rem;color:#64748b;margin-left:6px;">% — Manual button
+                    speed</span></div>
+
+            <div style="font-size:0.75rem; color:#60a5fa; margin:12px 0 4px; font-weight:bold;">🎛️ Auto-Tune
+            </div>
+            <div class="row"><span class="lbl">Min Amplitude:</span><input type="number" id="sf-at-min-amp" step="5"
+                    min="5" max="500" style="width:70px;"><span
+                    style="font-size:0.7rem;color:#64748b;margin-left:6px;">g — Min tension
+                    oscillation for autotune</span></div>
 
             <div style="margin-top:10px;">
                 <button class="btn-sm btn-blue" onclick="saveSafety()">💾 Apply Safety Limits</button>
@@ -1183,6 +1193,8 @@
                 document.getElementById('sf-stall-pwm').value = d.stall_pwm_threshold;
                 document.getElementById('sf-stall-rpm').value = d.stall_speed_threshold;
                 document.getElementById('sf-ut-floor').value = d.under_tension_floor_kg;
+                document.getElementById('sf-jog-speed').value = d.jog_speed_percent;
+                if (d.autotune_min_amp_g !== undefined) document.getElementById('sf-at-min-amp').value = d.autotune_min_amp_g;
             }).catch(e => console.log('Safety load error:', e));
         }
         function saveSafety() {
@@ -1199,7 +1211,9 @@
                 encoder_pwm_threshold: parseFloat(document.getElementById('sf-enc-pwm').value),
                 stall_pwm_threshold: parseFloat(document.getElementById('sf-stall-pwm').value),
                 stall_speed_threshold: parseFloat(document.getElementById('sf-stall-rpm').value),
-                under_tension_floor_kg: parseFloat(document.getElementById('sf-ut-floor').value)
+                under_tension_floor_kg: parseFloat(document.getElementById('sf-ut-floor').value),
+                jog_speed_percent: parseFloat(document.getElementById('sf-jog-speed').value),
+                autotune_min_amp_g: parseFloat(document.getElementById('sf-at-min-amp').value)
             };
             fetch('/api/safety', {
                 method: 'POST',

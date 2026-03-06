@@ -635,6 +635,9 @@ static esp_err_t api_safety_get_handler(httpd_req_t *req) {
                           limits.stall_pwm_threshold);
   cJSON_AddNumberToObject(root, "stall_speed_threshold",
                           limits.stall_speed_threshold);
+  cJSON_AddNumberToObject(root, "jog_speed_percent", limits.jog_speed_percent);
+  cJSON_AddNumberToObject(root, "autotune_min_amp_g",
+                          limits.autotune_min_amp_g);
 
   char *json = cJSON_PrintUnformatted(root);
   cJSON_Delete(root);
@@ -696,6 +699,10 @@ static esp_err_t api_safety_post_handler(httpd_req_t *req) {
     limits.stall_pwm_threshold = (float)item->valuedouble;
   if ((item = cJSON_GetObjectItem(root, "stall_speed_threshold")))
     limits.stall_speed_threshold = (float)item->valuedouble;
+  if ((item = cJSON_GetObjectItem(root, "jog_speed_percent")))
+    limits.jog_speed_percent = (float)item->valuedouble;
+  if ((item = cJSON_GetObjectItem(root, "autotune_min_amp_g")))
+    limits.autotune_min_amp_g = (float)item->valuedouble;
 
   // Save blob to NVS
   if (nvs_open("safety", NVS_READWRITE, &nvs) == ESP_OK) {

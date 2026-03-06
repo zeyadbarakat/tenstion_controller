@@ -71,6 +71,7 @@ typedef struct {
 
   // User Preferences
   uint8_t tension_unit;       /**< 0 = kg, 1 = grams */
+  float tension_step;         /**< Current tension step for keypad */
   float max_tension_setpoint; /**< Cap for tension SP */
 } system_status_t;
 
