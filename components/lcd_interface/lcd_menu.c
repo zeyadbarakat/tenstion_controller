@@ -260,10 +260,21 @@ static esp_err_t lcd_hw_init(lcd_handle_t h, const lcd_config_t *config) {
   lcd_command(h, LCD_CMD_ENTRY_MODE);
   lcd_command(h, LCD_CMD_DISPLAY_ON);
 
-  /* Create custom char 0: right arrow for menu cursor */
+  /* Create custom chars — MUST use slots >= 1 (slot 0 = \x00 = C null) */
+  /* Slot 1: right arrow for menu cursor */
   static const uint8_t arrow[] = {0x00, 0x04, 0x06, 0x1F,
                                   0x06, 0x04, 0x00, 0x00};
-  lcd_create_char(h, 0, arrow);
+  lcd_create_char(h, 1, arrow);
+
+  /* Slot 2: up arrow */
+  static const uint8_t up_arrow[] = {0x04, 0x0E, 0x15, 0x04,
+                                     0x04, 0x04, 0x00, 0x00};
+  lcd_create_char(h, 2, up_arrow);
+
+  /* Slot 3: down arrow */
+  static const uint8_t dn_arrow[] = {0x00, 0x04, 0x04, 0x04,
+                                     0x15, 0x0E, 0x04, 0x00};
+  lcd_create_char(h, 3, dn_arrow);
 
   ESP_LOGI(TAG, "20x4 LCD initialized (I2C addr=0x%02X)", config->i2c_addr);
   return ESP_OK;
@@ -286,8 +297,8 @@ static void keypad_init(lcd_handle_t h, const int gpios[4]) {
     gpio_config(&io);
     memset(&h->keys[i], 0, sizeof(key_state_t));
   }
-  ESP_LOGI(TAG, "Keypad initialized: GPIO %d,%d,%d,%d", gpios[0], gpios[1],
-           gpios[2], gpios[3]);
+  ESP_LOGI(TAG, "Keypad initialized: GPIO %d,%d,%d,%d,%d", gpios[0], gpios[1],
+           gpios[2], gpios[3], gpios[4]);
 }
 
 static uint32_t millis(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
@@ -420,7 +431,7 @@ static void render_main_screen(lcd_handle_t h) {
     snprintf(line, 21, "!! %-14s !!", fault_name(h->data.fault_flags));
     lcd_print_line(h, 3, line);
   } else {
-    snprintf(line, 21, "%c %-5.5s %4.0frpm %3.0f%%", '\x00',
+    snprintf(line, 21, "%c %-5.5s %4.0frpm %3.0f%%", '\x01',
              short_state_name(h->data.system_state), h->data.speed_actual,
              h->data.pwm_percent);
     lcd_print_line(h, 3, line);
@@ -439,7 +450,7 @@ static void render_menu_list(lcd_handle_t h, const char *title,
   for (int row = 1; row < LCD_ROWS; row++) {
     int idx = h->menu_scroll + (row - 1);
     if (idx < count) {
-      char cursor = (idx == h->menu_cursor) ? '\x00' : ' '; /* custom arrow */
+      char cursor = (idx == h->menu_cursor) ? '\x01' : ' '; /* custom arrow */
       snprintf(line, 21, "%c %-18s", cursor, items[idx]);
       lcd_print_line(h, row, line);
     } else {
@@ -456,7 +467,7 @@ static void render_wifi(lcd_handle_t h) {
   lcd_print_line(h, 2, "Pass: 12345678");
 
   int cur = h->menu_cursor;
-  snprintf(line, 21, "%c Toggle WiFi", cur == 0 ? '\x00' : ' ');
+  snprintf(line, 21, "%c Toggle WiFi", cur == 0 ? '\x01' : ' ');
   lcd_print_line(h, 3, line);
 }
 
@@ -535,7 +546,7 @@ static void render_faults(lcd_handle_t h) {
   }
 
   int cur = h->menu_cursor;
-  snprintf(line, 21, "%c Clear Faults", cur == 0 ? '\x00' : ' ');
+  snprintf(line, 21, "%c Clear Faults", cur == 0 ? '\x01' : ' ');
   lcd_print_line(h, 3, line);
 }
 
@@ -570,7 +581,7 @@ static void render_edit_value(lcd_handle_t h) {
   }
   lcd_print_line(h, 2, line);
 
-  lcd_print_line(h, 3, "\x03\x04:Adj  \x02:OK");
+  lcd_print_line(h, 3, "\x02\x03:Adj  OK:Save");
 }
 
 /*******************************************************************************
@@ -659,6 +670,9 @@ static void handle_menu_ok(lcd_handle_t h) {
         start_edit(h, "Tens Step kg", h->data.tension_step, 0.1f, 5.0f, 0.1f,
                    LCD_CMD_SET_TENSION_STEP);
       }
+    } else if (h->menu_cursor == 4) {
+      start_edit(h, "Jog Speed %", h->data.jog_speed, 1.0f, 50.0f, 1.0f,
+                 LCD_CMD_SET_JOG_SPEED);
     }
     break;
 
@@ -864,6 +878,29 @@ void lcd_update(lcd_handle_t handle, const lcd_display_data_t *data) {
     return;
 
   memcpy(&handle->data, data, sizeof(lcd_display_data_t));
+
+  /* Message overlay: show temporary message if active */
+  if (handle->message[0] != '\0' &&
+      esp_timer_get_time() < handle->message_expire_us) {
+    char msg_line[21];
+    int mlen = strlen(handle->message);
+    if (mlen > LCD_COLS)
+      mlen = LCD_COLS;
+    /* Center the message */
+    int pad = (LCD_COLS - mlen) / 2;
+    memset(msg_line, ' ', LCD_COLS);
+    memcpy(msg_line + pad, handle->message, mlen);
+    msg_line[LCD_COLS] = '\0';
+
+    lcd_print_line(handle, 0, "********************");
+    lcd_print_line(handle, 1, msg_line);
+    lcd_print_line(handle, 2, "********************");
+    lcd_print_line(handle, 3, "");
+    return;
+  } else if (handle->message[0] != '\0') {
+    /* Message expired — clear it */
+    handle->message[0] = '\0';
+  }
 
   switch (handle->current_screen) {
   case SCREEN_MAIN:

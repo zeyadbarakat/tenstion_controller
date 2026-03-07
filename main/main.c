@@ -74,7 +74,7 @@ static void init_flash_button(void) {
 // Web status callback handles (Must be above status_led_task)
 static control_manager_handle_t g_ctrl_mgr = NULL;
 static web_server_handle_t g_web_srv = NULL;
-static bool g_wifi_enabled = false;
+bool g_wifi_enabled = false;
 
 // Background task to blink/drive the discrete status LEDs
 static void status_led_task(void *param) {
@@ -387,15 +387,15 @@ void app_main(void) {
   ESP_LOGI(TAG, "NVS initialized");
 
   // Load saved WiFi state from NVS (default: enabled)
-  static bool wifi_enabled = true;
+  g_wifi_enabled = true;
   {
     nvs_handle_t nvs;
     if (nvs_open("config", NVS_READONLY, &nvs) == ESP_OK) {
       uint8_t saved_wifi = 1;
       if (nvs_get_u8(nvs, "wifi_enabled", &saved_wifi) == ESP_OK) {
-        wifi_enabled = saved_wifi ? true : false;
+        g_wifi_enabled = saved_wifi ? true : false;
         ESP_LOGI(TAG, "Loaded WiFi state from NVS: %s",
-                 wifi_enabled ? "ENABLED" : "DISABLED");
+                 g_wifi_enabled ? "ENABLED" : "DISABLED");
       }
       nvs_close(nvs);
     }
@@ -405,7 +405,7 @@ void app_main(void) {
   ret = init_wifi_ap();
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "WiFi init failed: %s", esp_err_to_name(ret));
-  } else if (!wifi_enabled) {
+  } else if (!g_wifi_enabled) {
     // If WiFi was disabled last time, stop it after init
     esp_wifi_stop();
     ESP_LOGI(TAG, "WiFi started but immediately stopped (user preference)");
@@ -506,7 +506,7 @@ void app_main(void) {
   // === Main Loop ===
   uint32_t loop_count = 0;
 
-  // wifi_enabled is now static global (loaded from NVS above)
+  // g_wifi_enabled is global (loaded from NVS above)
   static uint32_t btn_press_time = 0;
 
   while (1) {
@@ -523,8 +523,8 @@ void app_main(void) {
         btn_press_time = loop_count;
       } else if (loop_count - btn_press_time >=
                  10) { // ~1 second hold (10 * 100ms)
-        wifi_enabled = !wifi_enabled;
-        if (wifi_enabled) {
+        g_wifi_enabled = !g_wifi_enabled;
+        if (g_wifi_enabled) {
           esp_wifi_start();
           ESP_LOGI(TAG, "WiFi ENABLED (boot button held)");
         } else {
@@ -534,7 +534,7 @@ void app_main(void) {
         // Save WiFi state to NVS
         nvs_handle_t nvs;
         if (nvs_open("config", NVS_READWRITE, &nvs) == ESP_OK) {
-          nvs_set_u8(nvs, "wifi_enabled", wifi_enabled ? 1 : 0);
+          nvs_set_u8(nvs, "wifi_enabled", g_wifi_enabled ? 1 : 0);
           nvs_commit(nvs);
           nvs_close(nvs);
           ESP_LOGI(TAG, "WiFi state saved to NVS");

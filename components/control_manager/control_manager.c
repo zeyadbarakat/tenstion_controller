@@ -48,6 +48,7 @@
 #include "esp_log.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -264,7 +265,7 @@ esp_err_t control_manager_init(control_manager_handle_t *handle,
       .scl_gpio = CONFIG_LCD_GPIO_SCL,
       .i2c_addr = CONFIG_LCD_I2C_ADDR,
       .key_gpios = {CONFIG_KEY_GPIO_1, CONFIG_KEY_GPIO_2, CONFIG_KEY_GPIO_3,
-                    CONFIG_KEY_GPIO_4},
+                    CONFIG_KEY_GPIO_4, CONFIG_KEY_GPIO_5},
   };
   ret = lcd_init(&mgr->lcd, &lcd_cfg);
   if (ret != ESP_OK) {
@@ -1120,7 +1121,12 @@ static void ui_task(void *arg) {
         .max_rpm = CONFIG_MOTOR_MAX_RPM,
         .tension_step = mgr->tension_step,
         .tension_unit = status.tension_unit,
+        .jog_speed = safety_get_jog_speed_from_nvs(),
     };
+    {
+      extern bool g_wifi_enabled;
+      lcd_data.wifi_enabled = g_wifi_enabled;
+    }
     lcd_update(mgr->lcd, &lcd_data);
 
     vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(mgr->config.ui_period_ms));
@@ -1251,22 +1257,50 @@ static void on_menu_command(lcd_command_id_t cmd, float value,
     ESP_LOGI(TAG, "PPR set to %u", ppr);
     break;
   }
-  case LCD_CMD_SET_SPEED_KP:
+  case LCD_CMD_SET_SPEED_KP: {
     pi_set_gains(&mgr->speed_pi, value, mgr->speed_pi.ki);
-    ESP_LOGI(TAG, "Speed Kp set to %.4f", value);
+    nvs_handle_t nvs;
+    if (nvs_open("config", NVS_READWRITE, &nvs) == ESP_OK) {
+      nvs_set_i32(nvs, "speed_kp", (int32_t)(value * 10000.0f));
+      nvs_commit(nvs);
+      nvs_close(nvs);
+    }
+    ESP_LOGI(TAG, "Speed Kp set to %.4f (saved)", value);
     break;
-  case LCD_CMD_SET_SPEED_KI:
+  }
+  case LCD_CMD_SET_SPEED_KI: {
     pi_set_gains(&mgr->speed_pi, mgr->speed_pi.kp, value);
-    ESP_LOGI(TAG, "Speed Ki set to %.4f", value);
+    nvs_handle_t nvs;
+    if (nvs_open("config", NVS_READWRITE, &nvs) == ESP_OK) {
+      nvs_set_i32(nvs, "speed_ki", (int32_t)(value * 10000.0f));
+      nvs_commit(nvs);
+      nvs_close(nvs);
+    }
+    ESP_LOGI(TAG, "Speed Ki set to %.4f (saved)", value);
     break;
-  case LCD_CMD_SET_TENSION_KP:
+  }
+  case LCD_CMD_SET_TENSION_KP: {
     pi_set_gains(&mgr->tension_pi, value, mgr->tension_pi.ki);
-    ESP_LOGI(TAG, "Tension Kp set to %.4f", value);
+    nvs_handle_t nvs;
+    if (nvs_open("config", NVS_READWRITE, &nvs) == ESP_OK) {
+      nvs_set_i32(nvs, "tension_kp", (int32_t)(value * 10000.0f));
+      nvs_commit(nvs);
+      nvs_close(nvs);
+    }
+    ESP_LOGI(TAG, "Tension Kp set to %.4f (saved)", value);
     break;
-  case LCD_CMD_SET_TENSION_KI:
+  }
+  case LCD_CMD_SET_TENSION_KI: {
     pi_set_gains(&mgr->tension_pi, mgr->tension_pi.kp, value);
-    ESP_LOGI(TAG, "Tension Ki set to %.4f", value);
+    nvs_handle_t nvs;
+    if (nvs_open("config", NVS_READWRITE, &nvs) == ESP_OK) {
+      nvs_set_i32(nvs, "tension_ki", (int32_t)(value * 10000.0f));
+      nvs_commit(nvs);
+      nvs_close(nvs);
+    }
+    ESP_LOGI(TAG, "Tension Ki set to %.4f (saved)", value);
     break;
+  }
   case LCD_CMD_RUN:
     control_manager_run(mgr);
     break;
@@ -1276,9 +1310,46 @@ static void on_menu_command(lcd_command_id_t cmd, float value,
   case LCD_CMD_SET_MOTOR_DIR:
     ESP_LOGI(TAG, "Motor direction toggled");
     break;
-  case LCD_CMD_SET_MAX_RPM:
-    ESP_LOGI(TAG, "Max RPM set to %.0f", value);
+  case LCD_CMD_SET_MAX_RPM: {
+    uint16_t rpm = (uint16_t)value;
+    nvs_handle_t nvs;
+    if (nvs_open("config", NVS_READWRITE, &nvs) == ESP_OK) {
+      nvs_set_u16(nvs, "max_rpm", rpm);
+      nvs_commit(nvs);
+      nvs_close(nvs);
+    }
+    ESP_LOGI(TAG, "Max RPM set to %u (saved)", rpm);
     break;
+  }
+  case LCD_CMD_SET_JOG_SPEED: {
+    nvs_handle_t nvs;
+    if (nvs_open("safety", NVS_READWRITE, &nvs) == ESP_OK) {
+      nvs_set_i32(nvs, "jog_speed", (int32_t)(value * 10.0f));
+      nvs_commit(nvs);
+      nvs_close(nvs);
+    }
+    ESP_LOGI(TAG, "Jog speed set to %.0f%% (saved)", value);
+    break;
+  }
+  case LCD_CMD_WIFI_TOGGLE: {
+    /* Toggle WiFi on/off */
+    extern bool g_wifi_enabled;
+    g_wifi_enabled = !g_wifi_enabled;
+    if (g_wifi_enabled) {
+      esp_wifi_start();
+    } else {
+      esp_wifi_stop();
+    }
+    /* Save state to NVS */
+    nvs_handle_t nvs;
+    if (nvs_open("config", NVS_READWRITE, &nvs) == ESP_OK) {
+      nvs_set_u8(nvs, "wifi_enabled", g_wifi_enabled ? 1 : 0);
+      nvs_commit(nvs);
+      nvs_close(nvs);
+    }
+    ESP_LOGI(TAG, "WiFi %s (saved)", g_wifi_enabled ? "ON" : "OFF");
+    break;
+  }
   default:
     ESP_LOGD(TAG, "Unhandled LCD cmd: %d", cmd);
     break;

@@ -88,6 +88,7 @@ typedef enum {
   LCD_CMD_SET_SPEED_KI,
   LCD_CMD_SET_TENSION_KP,
   LCD_CMD_SET_TENSION_KI,
+  LCD_CMD_SET_JOG_SPEED,
 } lcd_command_id_t;
 
 /**

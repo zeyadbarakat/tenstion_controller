@@ -73,6 +73,7 @@ typedef struct {
   uint8_t tension_unit;       /**< 0 = kg, 1 = grams */
   float tension_step;         /**< Current tension step for keypad */
   float max_tension_setpoint; /**< Cap for tension SP */
+  bool wifi_enabled;          /**< WiFi on/off state */
 } system_status_t;
 
 /**
