@@ -49,18 +49,19 @@ typedef enum {
  */
 typedef enum {
   KEY_NONE = 0,
-  KEY_1_SHORT,   /**< ▲ short press */
-  KEY_2_SHORT,   /**< ▼ short press */
-  KEY_3_SHORT,   /**< ◄ short press */
-  KEY_4_SHORT,   /**< ► short press */
-  KEY_5_SHORT,   /**< ○ short press (enter) */
-  KEY_1_LONG,    /**< ▲ long press (>500ms) */
-  KEY_2_LONG,    /**< ▼ long press */
-  KEY_5_LONG,    /**< ○ long press */
-  KEY_3_HOLD,    /**< ◄ held down */
-  KEY_4_HOLD,    /**< ► held down */
-  KEY_3_RELEASE, /**< ◄ released (stop jog) */
-  KEY_4_RELEASE, /**< ► released (stop jog) */
+  KEY_1_SHORT,    /**< ▲ short press */
+  KEY_2_SHORT,    /**< ▼ short press */
+  KEY_3_SHORT,    /**< ◄ short press */
+  KEY_4_SHORT,    /**< ► short press */
+  KEY_5_SHORT,    /**< ○ short press (enter) */
+  KEY_1_LONG,     /**< ▲ long press (>500ms) */
+  KEY_2_LONG,     /**< ▼ long press */
+  KEY_5_LONG,     /**< ○ long press */
+  KEY_3_HOLD,     /**< ◄ held down */
+  KEY_4_HOLD,     /**< ► held down */
+  KEY_3_RELEASE,  /**< ◄ released (stop jog) */
+  KEY_4_RELEASE,  /**< ► released (stop jog) */
+  KEY_MENU_ENTER, /**< Special event for holding OK + Down */
 } keypad_event_t;
 
 /**

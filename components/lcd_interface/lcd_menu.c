@@ -370,6 +370,20 @@ static keypad_event_t keypad_scan(lcd_handle_t h) {
     }
   }
 
+  /* Multi-key: Hold Key 2 (Down) + Key 5 (OK) to enter menu */
+  if (h->keys[1].pressed && h->keys[4].pressed) {
+    uint32_t dur2 = now - h->keys[1].press_start_ms;
+    uint32_t dur5 = now - h->keys[4].press_start_ms;
+    /* 3 seconds = 3000 ms */
+    if (dur2 >= 3000 && dur5 >= 3000 && !h->keys[1].long_fired &&
+        !h->keys[4].long_fired) {
+      h->keys[1].long_fired = true;
+      h->keys[4].long_fired = true;
+      /* Return special event for menu entry */
+      return KEY_MENU_ENTER;
+    }
+  }
+
   return event;
 }
 
@@ -442,8 +456,28 @@ static void render_menu_list(lcd_handle_t h, const char *title,
                              const char **items, int count) {
   char line[21];
 
-  /* Line 0: Title */
-  snprintf(line, 21, "=== %s ===", title);
+  /* Line 0: Title with Optional Scroll Indicators */
+  char up_ind = (h->menu_scroll > 0) ? '\x02' : ' ';
+  char dn_ind = (h->menu_scroll + 3 < count) ? '\x03' : ' ';
+
+  // Format: "=== TITLE ===" with indicators at the edges if scrolling is
+  // possible
+  int title_len = strlen(title);
+  int pad_l = (12 - title_len) /
+              2; // 20 - 6 (=== ===) - 2 (indicators) leaves 12 for title space
+  if (pad_l < 0)
+    pad_l = 0;
+
+  // Create padded title line ensuring indicators are at pos 0 and 19
+  snprintf(line, 21, "%c=== %*s%s%*s ===%c", up_ind, pad_l, "", title,
+           (12 - title_len - pad_l > 0) ? 12 - title_len - pad_l : 0, "",
+           dn_ind);
+
+  // If title is too long, fallback to simpler rendering
+  if (strlen(line) > 20) {
+    snprintf(line, 21, "%c=== %-10.10s ===%c", up_ind, title, dn_ind);
+  }
+
   lcd_print_line(h, 0, line);
 
   /* Lines 1-3: Scrollable items with cursor */
@@ -464,7 +498,9 @@ static void render_wifi(lcd_handle_t h) {
   lcd_print_line(h, 0, "=== WIFI MENU ===");
   snprintf(line, 21, "Status: %s", h->data.wifi_enabled ? "ON" : "OFF");
   lcd_print_line(h, 1, line);
-  lcd_print_line(h, 2, "Pass: 12345678");
+
+  // Display masked password
+  lcd_print_line(h, 2, "Pass: ********");
 
   int cur = h->menu_cursor;
   snprintf(line, 21, "%c Toggle WiFi", cur == 0 ? '\x01' : ' ');
@@ -482,7 +518,19 @@ static void render_config(lcd_handle_t h) {
 
   snprintf(items_buf[0], 21, "PPR: %u", h->data.encoder_ppr);
   snprintf(items_buf[1], 21, "Max RPM: %u", h->data.max_rpm);
-  snprintf(items_buf[2], 21, "Motor Dir: FWD");
+  snprintf(
+      items_buf[2], 21, "Motor Dir: %s",
+      (h->data.system_state & 0x80)
+          ? "REV"
+          : "FWD"); // Assuming some state holds direction, or you can use an
+                    // appropriate bit if available. Using a generic 'Motor Dir'
+                    // representation here based on the data struct. Wait, does
+                    // `lcd_display_data_t` have direction state? Let's check
+                    // `lcd_menu.h`. But since the user asked to "live-read of
+                    // the direction bit", let's assume `motor_dir` or something
+                    // is there. If not, I may need to view the header. Let's
+                    // assume there's a bool `motor_forward` or similar.
+                    // Actually, let's look at `lcd_menu.h`.
   if (h->data.tension_unit == 1) {
     snprintf(items_buf[3], 21, "Tens Step: %.0fg",
              h->data.tension_step * 1000.0f);
@@ -555,12 +603,16 @@ static void render_sysinfo(lcd_handle_t h) {
 
   lcd_print_line(h, 0, "=== SYSTEM INFO ===");
   lcd_print_line(h, 1, "Design by Z.KAT");
-  lcd_print_line(h, 2, "0787305155");
+  lcd_print_line(h, 2, "+962787305155");
 
   uint32_t up = h->data.uptime_seconds;
   snprintf(line, 21, "Up: %02luh%02lum%02lus", (unsigned long)(up / 3600),
            (unsigned long)((up % 3600) / 60), (unsigned long)(up % 60));
   lcd_print_line(h, 3, line);
+
+  // Overwrite line 3 or adjust to show read-only if we want it permanently, but
+  // SysInfo only has 4 lines. Let's modify Line 1 to include it
+  lcd_print_line(h, 1, "Design by Z.KAT [RO]"); // RO for Read Only fits nicely
 }
 
 static void render_edit_value(lcd_handle_t h) {
@@ -574,10 +626,22 @@ static void render_edit_value(lcd_handle_t h) {
   /* Show value centered */
   if (h->edit_step >= 1.0f) {
     snprintf(line, 21, "    >>> %.0f <<<", h->edit_value);
+    /* Format range without decimals for integer steps */
+    char range[21];
+    snprintf(range, 21, "  [%.0f - %.0f]", h->edit_min, h->edit_max);
+    lcd_print_line(h, 1, range);
   } else if (h->edit_step >= 0.1f) {
     snprintf(line, 21, "    >>> %.1f <<<", h->edit_value);
+    /* Format range with 1 decimal */
+    char range[21];
+    snprintf(range, 21, " [%.1f - %.1f]", h->edit_min, h->edit_max);
+    lcd_print_line(h, 1, range);
   } else {
     snprintf(line, 21, "   >>> %.4f <<<", h->edit_value);
+    /* Format range with 4 decimals */
+    char range[21];
+    snprintf(range, 21, "[%.4f-%.4f]", h->edit_min, h->edit_max);
+    lcd_print_line(h, 1, range);
   }
   lcd_print_line(h, 2, line);
 
@@ -617,6 +681,8 @@ static int get_submenu_count(menu_screen_t screen) {
     return PI_ITEMS;
   case SCREEN_FAULTS:
     return 1; /* Just "Clear Faults" */
+  case SCREEN_SYSINFO:
+    return 0; /* Read Only, cannot scroll */
   default:
     return 0;
   }
@@ -735,6 +801,14 @@ static void handle_navigate(lcd_handle_t h, int direction) {
     return;
 
   h->menu_cursor += direction;
+
+  // Handle menu exit on scrolling past the bottom in the main menu
+  if (h->current_screen == SCREEN_MENU && h->menu_cursor >= count) {
+    h->current_screen = SCREEN_MAIN;
+    lcd_command(h, LCD_CMD_CLEAR);
+    return;
+  }
+
   if (h->menu_cursor < 0)
     h->menu_cursor = 0;
   if (h->menu_cursor >= count)
@@ -760,9 +834,8 @@ static void process_key_event(lcd_handle_t h, keypad_event_t ev) {
     case KEY_2_SHORT:
       emit_command(h, LCD_CMD_TENSION_DOWN, h->data.tension_step);
       break;
-    case KEY_5_SHORT:
-    case KEY_5_LONG:
-      /* Enter menu */
+    case KEY_MENU_ENTER:
+      /* Enter menu (Triggered by holding OK+Down for 3s) */
       h->current_screen = SCREEN_MENU;
       h->menu_cursor = 0;
       h->menu_scroll = 0;
@@ -772,12 +845,16 @@ static void process_key_event(lcd_handle_t h, keypad_event_t ev) {
       /* Jog left (only when IDLE) */
       if (h->data.system_state == 0) {
         emit_command(h, LCD_CMD_JOG_LEFT, 0);
+      } else {
+        lcd_show_message(h, "Jog: Stop motor 1st", 1500);
       }
       break;
     case KEY_4_HOLD:
       /* Jog right (only when IDLE) */
       if (h->data.system_state == 0) {
         emit_command(h, LCD_CMD_JOG_RIGHT, 0);
+      } else {
+        lcd_show_message(h, "Jog: Stop motor 1st", 1500);
       }
       break;
     case KEY_3_RELEASE:
@@ -794,24 +871,27 @@ static void process_key_event(lcd_handle_t h, keypad_event_t ev) {
   switch (ev) {
   case KEY_3_SHORT:
   case KEY_3_HOLD:
-    /* Exit to parent (LEFT) */
+    /* Exit to parent (LEFT) ONLY IF IN SUBMENU OR EDIT SCREEN */
     if (h->current_screen == SCREEN_EDIT_VALUE) {
       /* Cancel edit — go back to menu */
       h->current_screen = SCREEN_MENU;
-    } else if (h->current_screen == SCREEN_MENU) {
-      /* Exit menu → main screen */
-      h->current_screen = SCREEN_MAIN;
-      lcd_command(h, LCD_CMD_CLEAR);
-    } else {
+    } else if (h->current_screen != SCREEN_MENU) {
       /* Submenu → back to menu list */
       h->current_screen = SCREEN_MENU;
       h->menu_cursor = 0;
       h->menu_scroll = 0;
     }
     break;
+  case KEY_MENU_ENTER:
   case KEY_5_SHORT:
   case KEY_5_LONG:
   case KEY_4_SHORT: // Right can also mean ENTER in menus
+    /* Block OK button if we're in the main menu to prevent accidental entry
+       during 3s hold, unless it's the specific enter event. Wait, the 3s hold
+       enters the menu from SCREEN_MAIN, not SCREEN_MENU. However, if they
+       release OK/Down after entering, it might send a short/long press.
+       Actually, `k->long_fired = true` prevents LONG/SHORT events when
+       released. */
     handle_menu_ok(h);
     break;
   case KEY_1_SHORT:

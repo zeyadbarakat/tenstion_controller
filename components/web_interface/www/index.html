@@ -474,7 +474,7 @@
             <button class="jog-btn jog-stop" id="jog-stop-btn">⏹ STOP</button>
             <button class="jog-btn jog-right" id="jog-right">RIGHT ▶</button>
         </div>
-        <div class="jog-note">Press LEFT/RIGHT to move at 25% speed. Press STOP to halt.</div>
+        <div class="jog-note">Hold LEFT/RIGHT to jog. Release or press STOP to halt.</div>
     </div>
 
     <!-- Main Control Buttons -->
@@ -1172,9 +1172,25 @@
             fetch('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cmd: 21, value: 0 }) });
         }
 
-        // Simple click handlers - no holding needed
-        document.getElementById('jog-left').onclick = () => jogMove(-1);
-        document.getElementById('jog-right').onclick = () => jogMove(1);
+        // Hold-to-run for jog buttons
+        const jogLeft = document.getElementById('jog-left');
+        const jogRight = document.getElementById('jog-right');
+
+        // Left button
+        jogLeft.addEventListener('mousedown', () => jogMove(-1));
+        jogLeft.addEventListener('touchstart', (e) => { e.preventDefault(); jogMove(-1); });
+        jogLeft.addEventListener('mouseup', () => jogStop());
+        jogLeft.addEventListener('mouseleave', () => jogStop());
+        jogLeft.addEventListener('touchend', () => jogStop());
+
+        // Right button
+        jogRight.addEventListener('mousedown', () => jogMove(1));
+        jogRight.addEventListener('touchstart', (e) => { e.preventDefault(); jogMove(1); });
+        jogRight.addEventListener('mouseup', () => jogStop());
+        jogRight.addEventListener('mouseleave', () => jogStop());
+        jogRight.addEventListener('touchend', () => jogStop());
+
+        // Stop button remains a simple click
         document.getElementById('jog-stop-btn').onclick = () => jogStop();
 
         // Safety config
